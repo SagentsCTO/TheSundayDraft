@@ -117,7 +117,7 @@ PAGE_TMPL = """<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../styles.css?v=7">
+<link rel="stylesheet" href="../styles.css?v=8">
 <script type="application/ld+json">
 {{
   "@context": "https://schema.org",
@@ -144,8 +144,8 @@ PAGE_TMPL = """<!DOCTYPE html>
   <div class="wrap header-inner">
     <a href="../index.html" class="logo"><img src="../assets/logo-wordmark.png" alt="The Sunday Draft" class="logo-img"></a>
     <nav class="nav">
-      <a href="../index.html#episodes">Episodes</a>
-      <a href="index.html">Archive</a>
+      <a href="../index.html#episodes">Latest</a>
+      <a href="index.html">All Episodes</a>
       <a href="../index.html#listen">Listen</a>
       <a href="../index.html#about">About</a>
       <a href="../index.html#newsletter">Newsletter</a>
@@ -202,7 +202,7 @@ INDEX_TMPL = """<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../styles.css?v=7">
+<link rel="stylesheet" href="../styles.css?v=8">
 </head>
 <body>
 
@@ -211,7 +211,7 @@ INDEX_TMPL = """<!DOCTYPE html>
     <a href="../index.html" class="logo"><img src="../assets/logo-wordmark.png" alt="The Sunday Draft" class="logo-img"></a>
     <nav class="nav">
       <a href="../index.html#episodes">Latest</a>
-      <a href="index.html">Archive</a>
+      <a href="index.html">All Episodes</a>
       <a href="../index.html#listen">Listen</a>
       <a href="../index.html#about">About</a>
       <a href="../index.html#newsletter">Newsletter</a>
@@ -258,7 +258,7 @@ def render_episode_page(ep):
             f'allowfullscreen></iframe>'
         )
         media_url = f'https://www.youtube.com/watch?v={ep["video_id"]}'
-    else:
+    elif ep.get("spotify_id"):
         embed_class = "podcast-embed"
         embed_html = (
             f'<iframe src="https://open.spotify.com/embed/episode/{ep["spotify_id"]}?utm_source=generator" '
@@ -267,6 +267,17 @@ def render_episode_page(ep):
             f'loading="lazy" title="{ep["title"]}"></iframe>'
         )
         media_url = f'https://open.spotify.com/episode/{ep["spotify_id"]}'
+    elif ep.get("substack_url"):
+        embed_class = "substack-embed"
+        embed_html = (
+            f'<a class="btn btn-primary" href="{ep["substack_url"]}" target="_blank" rel="noopener">'
+            f'Listen to this episode on Substack &rarr;</a>'
+        )
+        media_url = ep["substack_url"]
+    else:
+        embed_class = "podcast-embed"
+        embed_html = ""
+        media_url = "https://thesundaydraft.com"
 
     eyebrow = ep["date_display"]
     if ep.get("duration"):

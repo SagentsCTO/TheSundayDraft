@@ -35,6 +35,10 @@ h1, h2, h3 {
 
 a { color: inherit; }
 
+p, .section-sub, .hero-sub, .show-notes p, h1, h2, h3 {
+  text-wrap: pretty;
+}
+
 /* Header */
 .site-header {
   position: sticky;
