@@ -283,6 +283,14 @@ def render_episode_page(ep):
             ep["substack_url"],
         )
 
+    def apple_embed():
+        return (
+            "substack-embed",
+            f'<a class="btn btn-primary" href="{ep["apple_url"]}" target="_blank" rel="noopener">'
+            f'Listen to this episode on Apple Podcasts &rarr;</a>',
+            ep["apple_url"],
+        )
+
     if source == "spotify" and ep.get("spotify_id"):
         embed_class, embed_html, media_url = spotify_embed()
     elif source == "youtube" and ep.get("video_id"):
@@ -293,6 +301,8 @@ def render_episode_page(ep):
         embed_class, embed_html, media_url = youtube_embed()
     elif ep.get("substack_url"):
         embed_class, embed_html, media_url = substack_embed()
+    elif ep.get("apple_url"):
+        embed_class, embed_html, media_url = apple_embed()
     else:
         embed_class = "podcast-embed"
         embed_html = ""
