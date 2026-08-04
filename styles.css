@@ -182,28 +182,50 @@ a { color: inherit; }
 /* Topics */
 .topics-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 20px;
 }
 
 .topic-card {
+  display: block;
   background: var(--paper);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 24px 20px;
-  text-align: center;
+  border-radius: 8px;
+  overflow: hidden;
+  text-decoration: none;
+  color: inherit;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-.topic-icon {
-  font-size: 26px;
+.topic-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(28, 26, 23, 0.08);
+}
+
+.topic-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
   display: block;
-  margin-bottom: 12px;
+  background: var(--paper-alt);
+}
+
+.topic-label {
+  display: block;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 14px 16px 0;
 }
 
 .topic-card h3 {
   font-size: 15px;
   font-weight: 600;
-  margin: 0;
+  margin: 8px 0 0;
+  padding: 0 16px 18px;
+  line-height: 1.35;
 }
 
 /* Listen */
