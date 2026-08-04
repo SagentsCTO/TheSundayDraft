@@ -11,6 +11,22 @@ Live at [thesundaydraft.com](https://thesundaydraft.com), hosted free on GitHub 
 - **Logo, favicon, and social-share image** use your actual logo files (`assets/logo-wordmark.png`, `assets/favicon.png`, `assets/apple-touch-icon.png`, `assets/og-image.jpg`).
 - **About / topics** sections use your channel's actual description and subject pillars.
 
+## Fully automatic new episodes
+
+`.github/workflows/sync-episodes.yml` runs `scripts/sync_episodes.py` once a day (14:00 UTC) on GitHub's own servers — no laptop, no push from you, no asking Claude. It:
+
+1. Checks the "Full Episodes" YouTube playlist's RSS feed for any video not already in `episodes/episodes.json`.
+2. Generates a full show-notes page for it (`episodes/{slug}.html`) with a YouTube embed, cleaned-up description, and SEO/structured-data tags.
+3. Regenerates `episodes/index.html` and `sitemap.xml`.
+4. Updates the homepage's "Latest episode" blurb and "Read the full show notes" link.
+5. Commits and pushes automatically — only if there's actually something new (safe to run daily forever).
+
+**One-time setup required:** GitHub Actions needs permission to push. In the repo, go to Settings → Actions → General → Workflow permissions, and select "Read and write permissions," then Save. Without this, the workflow will run but fail on the push step.
+
+**To test it right now** instead of waiting for the daily run: go to the Actions tab → "Sync new episodes" → Run workflow. Check the run log — it'll either say "No new episodes found" (if the playlist hasn't changed) or show you exactly what it generated.
+
+**What it won't get right automatically:** the YouTube video description becomes the show notes verbatim (minus obvious CTA/timestamp lines it filters out), so it won't read as polished as the hand-written ones. If you want it curated, just message Claude with the episode details and ask for a page instead of waiting for the bot.
+
 ## Optional: a real video embed instead of audio
 
 If you'd rather show video on the homepage, send the YouTube link to a specific full episode (not a Short) and the Spotify embed can be swapped for a direct video embed. Best long-term fix: create a dedicated "Full Episodes" playlist on YouTube (excluding Shorts) and add each episode to it going forward — the embed can point at that playlist so it keeps auto-updating without breaking on Shorts.
