@@ -340,6 +340,11 @@ p, .section-sub, .hero-sub, .show-notes p, h1, h2, h3 {
   border-radius: 12px;
 }
 
+.podcast-embed-apple iframe {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
 .show-notes p {
   color: var(--ink);
   margin: 0 0 18px;

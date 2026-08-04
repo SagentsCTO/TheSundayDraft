@@ -14,6 +14,7 @@ import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from urllib.parse import urlparse, parse_qs
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EPISODES_DIR = os.path.join(ROOT, "episodes")
@@ -117,7 +118,7 @@ PAGE_TMPL = """<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../styles.css?v=9">
+<link rel="stylesheet" href="../styles.css?v=10">
 <script type="application/ld+json">
 {{
   "@context": "https://schema.org",
@@ -202,7 +203,7 @@ INDEX_TMPL = """<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../styles.css?v=9">
+<link rel="stylesheet" href="../styles.css?v=10">
 </head>
 <body>
 
@@ -285,10 +286,18 @@ def render_episode_page(ep):
         )
 
     def apple_embed():
+        # Real Apple Podcasts embed player (embed.podcasts.apple.com), not just
+        # a link-out. 175px is Apple's documented minimum height for the
+        # single-episode player.
+        parsed = urlparse(ep["apple_url"])
+        i = parse_qs(parsed.query).get("i", [None])[0]
+        query = f"i={i}" if i else ""
+        src = f"https://embed.podcasts.apple.com{parsed.path}" + (f"?{query}" if query else "")
         return (
-            "substack-embed",
-            f'<a class="btn btn-primary" href="{ep["apple_url"]}" target="_blank" rel="noopener">'
-            f'Listen to this episode on Apple Podcasts &rarr;</a>',
+            "podcast-embed podcast-embed-apple",
+            f'<iframe src="{src}" width="100%" height="175" frameborder="0" '
+            f'sandbox="allow-forms allow-popups allow-same-origin allow-scripts allow-storage-access-by-user-activation allow-top-navigation-by-user-activation" '
+            f'allow="autoplay *; encrypted-media *;" loading="lazy" title="{ep["title"]}"></iframe>',
             ep["apple_url"],
         )
 
@@ -296,10 +305,10 @@ def render_episode_page(ep):
         embed_class, embed_html, media_url = spotify_embed()
     elif ep.get("video_id"):
         embed_class, embed_html, media_url = youtube_embed()
-    elif ep.get("substack_url"):
-        embed_class, embed_html, media_url = substack_embed()
     elif ep.get("apple_url"):
         embed_class, embed_html, media_url = apple_embed()
+    elif ep.get("substack_url"):
+        embed_class, embed_html, media_url = substack_embed()
     else:
         embed_class = "podcast-embed"
         embed_html = ""
