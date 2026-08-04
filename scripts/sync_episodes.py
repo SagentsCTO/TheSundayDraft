@@ -275,16 +275,12 @@ def render_episode_page(ep):
     def spotify_embed():
         # height=80 is Spotify's compact "audio bar" embed: no cover art, just
         # the play button and scrubber.
-        nudge = (
-            f'<p class="embed-nudge"><a href="{SPOTIFY_SHOW_URL}" target="_blank" rel="noopener">'
-            f'Follow The Sunday Draft on Spotify &rarr;</a></p>'
-        )
         return (
             "podcast-embed podcast-embed-compact",
             f'<iframe src="https://open.spotify.com/embed/episode/{ep["spotify_id"]}?utm_source=generator" '
             f'width="100%" height="80" frameborder="0" '
             f'allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" '
-            f'loading="lazy" title="{ep["title"]}"></iframe>' + nudge,
+            f'loading="lazy" title="{ep["title"]}"></iframe>',
             f'https://open.spotify.com/episode/{ep["spotify_id"]}',
         )
 
@@ -304,15 +300,11 @@ def render_episode_page(ep):
         i = parse_qs(parsed.query).get("i", [None])[0]
         query = f"i={i}" if i else ""
         src = f"https://embed.podcasts.apple.com{parsed.path}" + (f"?{query}" if query else "")
-        nudge = (
-            f'<p class="embed-nudge"><a href="{APPLE_SHOW_URL}" target="_blank" rel="noopener">'
-            f'Follow The Sunday Draft on Apple Podcasts &rarr;</a></p>'
-        )
         return (
             "podcast-embed podcast-embed-apple",
             f'<iframe src="{src}" width="100%" height="175" frameborder="0" '
             f'sandbox="allow-forms allow-popups allow-same-origin allow-scripts allow-storage-access-by-user-activation allow-top-navigation-by-user-activation" '
-            f'allow="autoplay *; encrypted-media *;" loading="lazy" title="{ep["title"]}"></iframe>' + nudge,
+            f'allow="autoplay *; encrypted-media *;" loading="lazy" title="{ep["title"]}"></iframe>',
             ep["apple_url"],
         )
 
@@ -328,6 +320,18 @@ def render_episode_page(ep):
         embed_class = "podcast-embed"
         embed_html = ""
         media_url = "https://thesundaydraft.com"
+
+    # Follow nudges for both platforms, always shown together under the embed
+    # regardless of which player is actually embedded — plays via an embed
+    # don't register as a follow on either platform, so this is the one-click
+    # way for a listener to actually subscribe wherever they prefer.
+    embed_html += (
+        '<p class="embed-nudge">'
+        f'<a href="{SPOTIFY_SHOW_URL}" target="_blank" rel="noopener">Follow on Spotify &rarr;</a>'
+        ' &middot; '
+        f'<a href="{APPLE_SHOW_URL}" target="_blank" rel="noopener">Follow on Apple Podcasts &rarr;</a>'
+        '</p>'
+    )
 
     eyebrow = ep["date_display"]
     if ep.get("duration"):
