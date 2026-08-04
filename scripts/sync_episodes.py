@@ -145,7 +145,7 @@ PAGE_TMPL = """<!DOCTYPE html>
     <a href="../index.html" class="logo"><img src="../assets/logo-wordmark.png" alt="The Sunday Draft" class="logo-img"></a>
     <nav class="nav">
       <a href="../index.html#episodes">Latest</a>
-      <a href="index.html">All Episodes</a>
+      <a href="index.html">Episodes</a>
       <a href="../index.html#listen">Listen</a>
       <a href="../index.html#about">About</a>
       <a href="../index.html#newsletter">Newsletter</a>
@@ -211,7 +211,7 @@ INDEX_TMPL = """<!DOCTYPE html>
     <a href="../index.html" class="logo"><img src="../assets/logo-wordmark.png" alt="The Sunday Draft" class="logo-img"></a>
     <nav class="nav">
       <a href="../index.html#episodes">Latest</a>
-      <a href="index.html">All Episodes</a>
+      <a href="index.html">Episodes</a>
       <a href="../index.html#listen">Listen</a>
       <a href="../index.html#about">About</a>
       <a href="../index.html#newsletter">Newsletter</a>
