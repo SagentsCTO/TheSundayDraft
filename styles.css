@@ -345,6 +345,21 @@ p, .section-sub, .hero-sub, .show-notes p, h1, h2, h3 {
   overflow: hidden;
 }
 
+.embed-nudge {
+  margin: 10px 0 0;
+  font-size: 14px;
+}
+
+.embed-nudge a {
+  color: var(--muted, #6b6b6b);
+  text-decoration: none;
+  border-bottom: 1px solid currentColor;
+}
+
+.embed-nudge a:hover {
+  color: var(--ink);
+}
+
 .show-notes p {
   color: var(--ink);
   margin: 0 0 18px;

@@ -25,6 +25,13 @@ SITEMAP_PATH = os.path.join(ROOT, "sitemap.xml")
 PLAYLIST_ID = "PLCxPsA1wKBkk"  # "Full Episodes" playlist — Shorts are never added here
 FEED_URL = f"https://www.youtube.com/feeds/videos.xml?playlist_id={PLAYLIST_ID}"
 
+# Show-level (not episode-level) follow links, used for the "Follow on X" nudge
+# under embedded players — plays via the embed don't register as a follow on
+# either platform, so this is a one-click way for listeners to actually
+# subscribe on the platform they're already listening in.
+SPOTIFY_SHOW_URL = "https://open.spotify.com/show/2EoiIdSHex4INCZVOmkU1F"
+APPLE_SHOW_URL = "https://podcasts.apple.com/us/podcast/the-sunday-draft/id1887351307"
+
 NS = {
     "atom": "http://www.w3.org/2005/Atom",
     "yt": "http://www.youtube.com/xml/schemas/2015",
@@ -118,7 +125,7 @@ PAGE_TMPL = """<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../styles.css?v=10">
+<link rel="stylesheet" href="../styles.css?v=11">
 <script type="application/ld+json">
 {{
   "@context": "https://schema.org",
@@ -203,7 +210,7 @@ INDEX_TMPL = """<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../styles.css?v=10">
+<link rel="stylesheet" href="../styles.css?v=11">
 </head>
 <body>
 
@@ -268,12 +275,16 @@ def render_episode_page(ep):
     def spotify_embed():
         # height=80 is Spotify's compact "audio bar" embed: no cover art, just
         # the play button and scrubber.
+        nudge = (
+            f'<p class="embed-nudge"><a href="{SPOTIFY_SHOW_URL}" target="_blank" rel="noopener">'
+            f'Follow The Sunday Draft on Spotify &rarr;</a></p>'
+        )
         return (
             "podcast-embed podcast-embed-compact",
             f'<iframe src="https://open.spotify.com/embed/episode/{ep["spotify_id"]}?utm_source=generator" '
             f'width="100%" height="80" frameborder="0" '
             f'allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" '
-            f'loading="lazy" title="{ep["title"]}"></iframe>',
+            f'loading="lazy" title="{ep["title"]}"></iframe>' + nudge,
             f'https://open.spotify.com/episode/{ep["spotify_id"]}',
         )
 
@@ -293,11 +304,15 @@ def render_episode_page(ep):
         i = parse_qs(parsed.query).get("i", [None])[0]
         query = f"i={i}" if i else ""
         src = f"https://embed.podcasts.apple.com{parsed.path}" + (f"?{query}" if query else "")
+        nudge = (
+            f'<p class="embed-nudge"><a href="{APPLE_SHOW_URL}" target="_blank" rel="noopener">'
+            f'Follow The Sunday Draft on Apple Podcasts &rarr;</a></p>'
+        )
         return (
             "podcast-embed podcast-embed-apple",
             f'<iframe src="{src}" width="100%" height="175" frameborder="0" '
             f'sandbox="allow-forms allow-popups allow-same-origin allow-scripts allow-storage-access-by-user-activation allow-top-navigation-by-user-activation" '
-            f'allow="autoplay *; encrypted-media *;" loading="lazy" title="{ep["title"]}"></iframe>',
+            f'allow="autoplay *; encrypted-media *;" loading="lazy" title="{ep["title"]}"></iframe>' + nudge,
             ep["apple_url"],
         )
 
