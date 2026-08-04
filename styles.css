@@ -159,6 +159,10 @@ a { color: inherit; }
   white-space: nowrap;
 }
 
+.section-sub-lg {
+  max-width: 700px;
+}
+
 @media (max-width: 720px) {
   .section-sub-wide {
     max-width: 560px;
@@ -308,4 +312,72 @@ a { color: inherit; }
 @media (max-width: 640px) {
   .nav { display: none; }
   .section { padding: 48px 0; }
+}
+
+/* Episode article pages */
+.wrap-narrow {
+  max-width: 720px;
+}
+
+.episode-article h1 {
+  font-size: clamp(28px, 4vw, 40px);
+  text-align: left;
+}
+
+.episode-article .eyebrow {
+  margin-bottom: 12px;
+}
+
+.episode-article .podcast-embed {
+  margin: 24px 0 32px;
+}
+
+.show-notes p {
+  color: var(--ink);
+  margin: 0 0 18px;
+}
+
+.show-notes ul {
+  margin: 0 0 18px;
+  padding-left: 22px;
+}
+
+.show-notes li {
+  margin-bottom: 8px;
+}
+
+.episode-article .text-link {
+  text-align: left;
+  margin-top: 8px;
+}
+
+/* Episode archive list */
+.episode-list {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.episode-list-item {
+  display: block;
+  padding: 24px 0;
+  border-bottom: 1px solid var(--border);
+  text-decoration: none;
+  color: inherit;
+}
+
+.episode-list-item:hover h3 { color: var(--accent); }
+
+.episode-list-item .eyebrow { margin-bottom: 8px; }
+
+.episode-list-item h3 {
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.episode-list-item p {
+  color: var(--muted);
+  margin: 0;
 }
