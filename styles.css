@@ -49,15 +49,19 @@ a { color: inherit; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 68px;
+  height: 88px;
 }
 
 .logo {
-  font-family: var(--serif);
-  font-weight: 700;
-  font-size: 20px;
+  display: flex;
+  align-items: center;
   text-decoration: none;
-  letter-spacing: -0.01em;
+}
+
+.logo-img {
+  height: 64px;
+  width: auto;
+  display: block;
 }
 
 .nav {
@@ -151,18 +155,14 @@ a { color: inherit; }
 }
 
 /* Episodes */
-.video-embed {
-  position: relative;
-  padding-top: 56.25%;
+.podcast-embed {
   border-radius: 6px;
   overflow: hidden;
   border: 1px solid var(--border);
 }
 
-.video-embed iframe {
-  position: absolute;
-  top: 0; left: 0;
-  width: 100%; height: 100%;
+.podcast-embed iframe {
+  display: block;
 }
 
 .text-link {
@@ -235,23 +235,13 @@ a { color: inherit; }
 /* Newsletter */
 .newsletter-inner { text-align: center; }
 
-.newsletter-form {
+.substack-embed {
   display: flex;
-  gap: 10px;
   justify-content: center;
-  max-width: 420px;
-  margin: 0 auto;
-  flex-wrap: wrap;
 }
 
-.newsletter-form input {
-  flex: 1;
-  min-width: 220px;
-  padding: 13px 16px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-family: var(--sans);
-  font-size: 14px;
+.substack-embed iframe {
+  max-width: 100%;
 }
 
 /* Footer */

@@ -1,45 +1,37 @@
 # The Sunday Draft — website
 
-A free, static site for The Sunday Draft, built to deploy on GitHub Pages. No build step, no framework — just `index.html`, `styles.css`, and `script.js`.
+Live at [thesundaydraft.com](https://thesundaydraft.com), hosted free on GitHub Pages from [github.com/SagentsCTO/TheSundayDraft](https://github.com/SagentsCTO/TheSundayDraft). No build step, no framework — just `index.html`, `styles.css`, `script.js`, and an `assets/` folder.
 
-## What's already wired up
+## What's wired up
 
-- **Latest episodes** embed pulls automatically from your YouTube uploads playlist (`UU45awL7dke6c7OCEPdvxNqw`). You never have to touch this — it updates itself every time you publish.
+- **Latest episode** embeds your Spotify show player — it auto-updates every Sunday when a new episode drops, no maintenance required. (A YouTube playlist embed was tried first, but this channel mixes in Shorts, which YouTube's classic iframe player can't play — that's what caused the "this video is unavailable" error. Spotify's embed doesn't have that problem.)
+- **Newsletter** embeds your real Substack subscribe widget.
+- **Listen everywhere** links to your real YouTube, Spotify, and Apple Podcasts pages.
+- **Footer** links to YouTube, BlueSky, and Substack.
+- **Logo, favicon, and social-share image** use your actual logo files (`assets/logo-wordmark.png`, `assets/favicon.png`, `assets/apple-touch-icon.png`, `assets/og-image.jpg`).
 - **About / topics** sections use your channel's actual description and subject pillars.
-- **Newsletter form** and **listen-elsewhere buttons** are stubbed in and marked `TODO` — see below.
 
-## 1. Put this on GitHub Pages (free hosting)
+## Optional: a real video embed instead of audio
 
-1. Create a new repo on GitHub, e.g. `thesundaydraft-site` (public repo — required for free Pages on a personal account).
-2. Upload these three files (`index.html`, `styles.css`, `script.js`) to the repo root — drag-and-drop works fine on github.com, or:
-   ```
-   git init
-   git add .
-   git commit -m "Launch site"
-   git branch -M main
-   git remote add origin https://github.com/<your-username>/thesundaydraft-site.git
-   git push -u origin main
-   ```
-3. In the repo: **Settings → Pages → Source → Deploy from a branch → `main` / `root`**.
-4. Your site goes live at `https://<your-username>.github.io/thesundaydraft-site/` within a minute or two.
+If you'd rather show video on the homepage, send the YouTube link to a specific full episode (not a Short) and the Spotify embed can be swapped for a direct video embed. Best long-term fix: create a dedicated "Full Episodes" playlist on YouTube (excluding Shorts) and add each episode to it going forward — the embed can point at that playlist so it keeps auto-updating without breaking on Shorts.
 
-## 2. Optional: custom domain
+## Pushing future changes
 
-If you buy a domain (e.g. `thesundaydraft.com` — a domain is the one part of this that isn't free, typically ~$12/yr):
+The repo already has everything live. To make changes:
 
-1. Add a file named `CNAME` (no extension) to the repo root containing just your domain, e.g. `thesundaydraft.com`.
-2. At your domain registrar, add a `CNAME` record pointing `www` to `<your-username>.github.io`, and `A` records for the apex domain to GitHub's IPs (185.199.108.153, .109.153, .110.153, .111.153).
-3. In **Settings → Pages**, enter the custom domain and enable "Enforce HTTPS."
+1. Edit files locally, or directly on github.com (pencil icon on any file).
+2. Commit to `main` — GitHub Pages redeploys automatically within a minute or two.
 
-## 3. Fill in the TODOs
+If working locally:
+```
+git clone https://github.com/SagentsCTO/TheSundayDraft.git
+cd TheSundayDraft
+# make edits
+git add .
+git commit -m "Update site"
+git push
+```
 
-Open `index.html` and search for `TODO`:
+## Domain / DNS
 
-- **Newsletter form action** — the form currently points to a placeholder Formspree URL. Sign up free at [formspree.io](https://formspree.io) (50 submissions/month free) or [buttondown.com](https://buttondown.com), create a form, and swap in your real endpoint. Buttondown is worth considering over Formspree since it's built for actually *sending* the weekly newsletter, not just collecting emails.
-- **Listen-elsewhere buttons** (Spotify / Apple Podcasts) — add your real show links once you've submitted the RSS feed to those platforms.
-- **Social links** in the footer — add Instagram/X if you have them, or delete the `<a>` tags you don't need.
-- **`assets/og-image.jpg` and `assets/favicon.png`** — referenced but not included. Add a 1200×630 image for social share previews and a small square favicon; drop them in an `assets/` folder.
-
-## Making changes later
-
-Everything is plain HTML/CSS in two files — no build tools. Edit `index.html` for content, `styles.css` for design, then commit and push; Pages redeploys automatically in under a minute.
+Custom domain is `thesundaydraft.com`, configured via the `CNAME` file in the repo root plus DNS records at the registrar (GoDaddy): four `A` records at `@` pointing to GitHub's Pages IPs, and a `CNAME` record for `www` pointing to `sagentscto.github.io`. Already set up and verified.
