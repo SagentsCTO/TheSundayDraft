@@ -117,7 +117,7 @@ PAGE_TMPL = """<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../styles.css?v=8">
+<link rel="stylesheet" href="../styles.css?v=9">
 <script type="application/ld+json">
 {{
   "@context": "https://schema.org",
@@ -202,7 +202,7 @@ INDEX_TMPL = """<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="../styles.css?v=8">
+<link rel="stylesheet" href="../styles.css?v=9">
 </head>
 <body>
 
@@ -249,11 +249,10 @@ INDEX_TMPL = """<!DOCTYPE html>
 
 
 def render_episode_page(ep):
-    # Embed choice follows the "source" field (the platform this episode is
-    # primarily associated with), not just whichever ID happens to be populated.
-    # video_id is often present purely for accurate date backfill and shouldn't
-    # override a Spotify/Apple episode's embed.
-    source = ep.get("source")
+    # Every episode page pairs the full Apple-sourced show notes (body_paragraphs)
+    # with a single audio/video player. Spotify's compact, image-free player is
+    # the default whenever a spotify_id exists; otherwise fall back to YouTube,
+    # then a plain link to Substack or Apple Podcasts.
 
     def youtube_embed():
         return (
@@ -266,10 +265,12 @@ def render_episode_page(ep):
         )
 
     def spotify_embed():
+        # height=80 is Spotify's compact "audio bar" embed: no cover art, just
+        # the play button and scrubber.
         return (
-            "podcast-embed",
+            "podcast-embed podcast-embed-compact",
             f'<iframe src="https://open.spotify.com/embed/episode/{ep["spotify_id"]}?utm_source=generator" '
-            f'width="100%" height="152" frameborder="0" '
+            f'width="100%" height="80" frameborder="0" '
             f'allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" '
             f'loading="lazy" title="{ep["title"]}"></iframe>',
             f'https://open.spotify.com/episode/{ep["spotify_id"]}',
@@ -291,11 +292,7 @@ def render_episode_page(ep):
             ep["apple_url"],
         )
 
-    if source == "spotify" and ep.get("spotify_id"):
-        embed_class, embed_html, media_url = spotify_embed()
-    elif source == "youtube" and ep.get("video_id"):
-        embed_class, embed_html, media_url = youtube_embed()
-    elif ep.get("spotify_id"):
+    if ep.get("spotify_id"):
         embed_class, embed_html, media_url = spotify_embed()
     elif ep.get("video_id"):
         embed_class, embed_html, media_url = youtube_embed()
@@ -312,7 +309,10 @@ def render_episode_page(ep):
     if ep.get("duration"):
         eyebrow += f' &middot; {ep["duration"]}'
 
-    body_html = "\n".join(f"<p>{p}</p>" for p in ep.get("body_paragraphs", [ep["meta_desc"]]))
+    if ep.get("content_html"):
+        body_html = ep["content_html"]
+    else:
+        body_html = "\n".join(f"<p>{p}</p>" for p in ep.get("body_paragraphs", [ep["meta_desc"]]))
 
     return PAGE_TMPL.format(
         title=ep["title"],

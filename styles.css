@@ -336,6 +336,10 @@ p, .section-sub, .hero-sub, .show-notes p, h1, h2, h3 {
   margin: 24px 0 32px;
 }
 
+.podcast-embed-compact iframe {
+  border-radius: 12px;
+}
+
 .show-notes p {
   color: var(--ink);
   margin: 0 0 18px;
