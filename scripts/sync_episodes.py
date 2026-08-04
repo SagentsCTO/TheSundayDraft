@@ -249,31 +249,50 @@ INDEX_TMPL = """<!DOCTYPE html>
 
 
 def render_episode_page(ep):
-    if ep.get("video_id"):
-        embed_class = "video-embed"
-        embed_html = (
+    # Embed choice follows the "source" field (the platform this episode is
+    # primarily associated with), not just whichever ID happens to be populated.
+    # video_id is often present purely for accurate date backfill and shouldn't
+    # override a Spotify/Apple episode's embed.
+    source = ep.get("source")
+
+    def youtube_embed():
+        return (
+            "video-embed",
             f'<iframe src="https://www.youtube.com/embed/{ep["video_id"]}" '
             f'title="{ep["title"]}" frameborder="0" '
             f'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" '
-            f'allowfullscreen></iframe>'
+            f'allowfullscreen></iframe>',
+            f'https://www.youtube.com/watch?v={ep["video_id"]}',
         )
-        media_url = f'https://www.youtube.com/watch?v={ep["video_id"]}'
-    elif ep.get("spotify_id"):
-        embed_class = "podcast-embed"
-        embed_html = (
+
+    def spotify_embed():
+        return (
+            "podcast-embed",
             f'<iframe src="https://open.spotify.com/embed/episode/{ep["spotify_id"]}?utm_source=generator" '
             f'width="100%" height="152" frameborder="0" '
             f'allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" '
-            f'loading="lazy" title="{ep["title"]}"></iframe>'
+            f'loading="lazy" title="{ep["title"]}"></iframe>',
+            f'https://open.spotify.com/episode/{ep["spotify_id"]}',
         )
-        media_url = f'https://open.spotify.com/episode/{ep["spotify_id"]}'
-    elif ep.get("substack_url"):
-        embed_class = "substack-embed"
-        embed_html = (
+
+    def substack_embed():
+        return (
+            "substack-embed",
             f'<a class="btn btn-primary" href="{ep["substack_url"]}" target="_blank" rel="noopener">'
-            f'Listen to this episode on Substack &rarr;</a>'
+            f'Listen to this episode on Substack &rarr;</a>',
+            ep["substack_url"],
         )
-        media_url = ep["substack_url"]
+
+    if source == "spotify" and ep.get("spotify_id"):
+        embed_class, embed_html, media_url = spotify_embed()
+    elif source == "youtube" and ep.get("video_id"):
+        embed_class, embed_html, media_url = youtube_embed()
+    elif ep.get("spotify_id"):
+        embed_class, embed_html, media_url = spotify_embed()
+    elif ep.get("video_id"):
+        embed_class, embed_html, media_url = youtube_embed()
+    elif ep.get("substack_url"):
+        embed_class, embed_html, media_url = substack_embed()
     else:
         embed_class = "podcast-embed"
         embed_html = ""
