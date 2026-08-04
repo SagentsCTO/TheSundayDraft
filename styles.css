@@ -154,6 +154,18 @@ a { color: inherit; }
   margin: 0 auto 36px;
 }
 
+.section-sub-wide {
+  max-width: none;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .section-sub-wide {
+    max-width: 560px;
+    white-space: normal;
+  }
+}
+
 /* Episodes */
 .video-embed {
   position: relative;
