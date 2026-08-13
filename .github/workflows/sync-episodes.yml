@@ -1,0 +1,37 @@
+name: Sync new episodes
+
+on:
+  schedule:
+    # Runs weekly, Monday 14:00 UTC — the day after new Sunday episodes drop.
+    - cron: "0 14 * * 1"
+  workflow_dispatch: {}  # lets you trigger it manually from the Actions tab to test
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Generate any new episode pages
+        run: python3 scripts/sync_episodes.py
+
+      - name: Commit and push if anything changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes, nothing to commit."
+          else
+            git commit -m "Auto-add new episode show notes"
+            git push
+          fi
