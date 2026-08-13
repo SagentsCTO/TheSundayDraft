@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """
-Checks the 'Full Episodes' YouTube playlist for videos that don't have a
-show-notes page yet, and generates one for each — plus regenerates the
-episode archive, the homepage's "Latest episode" blurb, and sitemap.xml.
+Checks Apple Podcasts for episodes that don't have a show-notes page yet,
+and generates one for each — plus regenerates the episode archive, the
+homepage's "Latest episode" link/blurb, and sitemap.xml.
+
+This site intentionally does not embed any video or YouTube content on
+episode pages — those pages exist to mirror what actually went out on
+Apple/Substack (audio show notes only). The homepage's video is a separate,
+static YouTube playlist embed unrelated to this script.
 
 Runs stdlib-only (no pip install needed) so it's cheap and reliable inside
 GitHub Actions. Safe to run repeatedly: does nothing if there's nothing new.
@@ -12,7 +17,6 @@ import os
 import re
 import sys
 import urllib.request
-import xml.etree.ElementTree as ET
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 
@@ -22,28 +26,12 @@ MANIFEST_PATH = os.path.join(EPISODES_DIR, "episodes.json")
 INDEX_PATH = os.path.join(ROOT, "index.html")
 SITEMAP_PATH = os.path.join(ROOT, "sitemap.xml")
 
-PLAYLIST_ID = "PLCxPsA1wKBkk"  # "Full Episodes" playlist — Shorts are never added here
-FEED_URL = f"https://www.youtube.com/feeds/videos.xml?playlist_id={PLAYLIST_ID}"
-
-# Apple's iTunes Lookup API is the primary source for new episodes now: it
-# carries the full, real show-notes text (unlike YouTube's RSS, which has no
-# usable description field), and isn't capped the way the raw Substack/Apple
-# RSS feed is. The YouTube "Full Episodes" playlist is only consulted
-# afterward, to find a matching video_id for the embed.
+# Apple's iTunes Lookup API is the sole source for episodes: full real show-
+# notes text, not capped the way the raw Substack/Apple RSS feed is.
 APPLE_PODCAST_ID = "1887351307"
 APPLE_LOOKUP_URL = (
     f"https://itunes.apple.com/lookup?id={APPLE_PODCAST_ID}&entity=podcastEpisode&limit=200"
 )
-
-# Videos that exist on the "Full Episodes" YouTube playlist but are
-# deliberately kept off the site: they were never real Apple/Substack
-# episodes (livestream clips with no real show notes), so switching the
-# primary source to Apple already keeps them from being auto-added. This is
-# just a belt-and-suspenders backstop in case that ever changes.
-EXCLUDED_VIDEO_IDS = {
-    "3I80QjKo7ic",  # Surviving the HARDEST Days to Everest Base Camp (EBC Part 2)
-    "YJxedOV_-MU",  # The Collapse of Diplomacy - Is It Dead?
-}
 
 # Show-level (not episode-level) follow links, used for the "Follow on X" nudge
 # under embedded players — plays via the embed don't register as a follow on
@@ -52,46 +40,11 @@ EXCLUDED_VIDEO_IDS = {
 SPOTIFY_SHOW_URL = "https://open.spotify.com/show/2EoiIdSHex4INCZVOmkU1F"
 APPLE_SHOW_URL = "https://podcasts.apple.com/us/podcast/the-sunday-draft/id1887351307"
 
-NS = {
-    "atom": "http://www.w3.org/2005/Atom",
-    "yt": "http://www.youtube.com/xml/schemas/2015",
-    "media": "http://search.yahoo.com/mrss/",
-}
-
 CTA_LINE_RE = re.compile(
     r"^(subscribe|follow|watch on|listen on|find us|referenced|timestamps?|"
     r"\d{1,2}:\d{2}|🎥|🎧|🎬|📖|🔗|▶️|📌|📣|⏱️|🎙️)",
     re.IGNORECASE,
 )
-
-
-def fetch_feed():
-    req = urllib.request.Request(FEED_URL, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read()
-
-
-def parse_entries(xml_bytes):
-    root = ET.fromstring(xml_bytes)
-    entries = []
-    for entry in root.findall("atom:entry", NS):
-        video_id = entry.findtext("yt:videoId", default="", namespaces=NS)
-        title = entry.findtext("atom:title", default="", namespaces=NS)
-        published = entry.findtext("atom:published", default="", namespaces=NS)
-        group = entry.find("media:group", NS)
-        description = ""
-        if group is not None:
-            description = group.findtext("media:description", default="", namespaces=NS) or ""
-        if video_id and title:
-            entries.append({
-                "video_id": video_id,
-                "title": title.strip(),
-                "published": published,
-                "description": description.strip(),
-            })
-    # newest first, by published date
-    entries.sort(key=lambda e: e["published"], reverse=True)
-    return entries
 
 
 def fetch_apple_episodes():
@@ -130,6 +83,13 @@ def apple_description_to_html(raw_description):
             line.endswith(":") and len(line) < 70 and not line[:1].islower()
         ):
             blocks.append(("h", line))
+        elif CTA_LINE_RE.match(line):
+            # Cross-platform promo boilerplate ("🎧 Listen above, or find us on
+            # Spotify and Apple Podcasts.", "🎬 Watch on YouTube.", etc.) is
+            # redundant now that the page already has a real embed plus
+            # explicit Spotify/Apple follow links underneath it — drop it
+            # instead of duplicating it into the show notes body.
+            continue
         else:
             blocks.append(("p", line))
 
@@ -168,6 +128,18 @@ def slugify(title):
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
     s = re.sub(r"-{2,}", "-", s)
     return s[:80].rstrip("-")
+
+
+def normalize_title(title):
+    """Loose-match key for 'is this episode already in the manifest' —
+    lowercased, quotes/parens stripped, whitespace collapsed. Titles are the
+    one thing that stay consistent between Apple and the manifest, unlike
+    slugs (hand-trimmed) or dates (Apple's releaseDate vs. YouTube's publish
+    date can differ by several days for the same episode)."""
+    t = title.lower().strip()
+    t = re.sub(r"[’'\"“”()]", "", t)
+    t = re.sub(r"\s+", " ", t)
+    return t
 
 
 def clean_description(text):
@@ -345,20 +317,12 @@ INDEX_TMPL = """<!DOCTYPE html>
 
 
 def render_episode_page(ep):
-    # Every episode page pairs the full Apple-sourced show notes (body_paragraphs)
-    # with a single audio/video player. Spotify's compact, image-free player is
-    # the default whenever a spotify_id exists; otherwise fall back to YouTube,
-    # then a plain link to Substack or Apple Podcasts.
-
-    def youtube_embed():
-        return (
-            "video-embed",
-            f'<iframe src="https://www.youtube.com/embed/{ep["video_id"]}" '
-            f'title="{ep["title"]}" frameborder="0" '
-            f'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" '
-            f'allowfullscreen></iframe>',
-            f'https://www.youtube.com/watch?v={ep["video_id"]}',
-        )
+    # Every episode page pairs the full Apple-sourced show notes with a single
+    # AUDIO player only — no video, no YouTube, by design. This site's episode
+    # pages exist to mirror what went out on Apple/Substack; anyone who wants
+    # video watches on YouTube itself. Spotify's compact, image-free player is
+    # the default whenever a spotify_id exists; otherwise fall back to Apple's
+    # embed player, then a plain link to Substack.
 
     def spotify_embed():
         # height=80 is Spotify's compact "audio bar" embed: no cover art, just
@@ -398,8 +362,6 @@ def render_episode_page(ep):
 
     if ep.get("spotify_id"):
         embed_class, embed_html, media_url = spotify_embed()
-    elif ep.get("video_id"):
-        embed_class, embed_html, media_url = youtube_embed()
     elif ep.get("apple_url"):
         embed_class, embed_html, media_url = apple_embed()
     elif ep.get("substack_url"):
@@ -496,46 +458,23 @@ def main():
     with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
         manifest = json.load(f)
     known_slugs = {ep["slug"] for ep in manifest}
-    # Matching "already have this episode" by slugified title is unreliable:
-    # several existing entries were hand-trimmed to shorter slugs than what
-    # slugify(Apple's raw trackName) produces (subtitles, emoji prefixes,
-    # quote marks, etc. all differ). Release date is a far more reliable key
-    # for a weekly show — two real episodes essentially never share a date.
+    # Matching "already have this episode" on release date alone isn't
+    # reliable either: Apple's actual releaseDate for an episode can be
+    # several days off from the date we stored when it was first added via
+    # the old YouTube-publish-date pipeline (confirmed — this created three
+    # duplicate entries the first time this ran against the existing
+    # manifest). Title is the one field that's consistently identical
+    # between Apple and whatever's already in the manifest, so an episode is
+    # only treated as new if BOTH its date and its normalized title are
+    # unrecognized — matching on either one alone is enough to skip it.
     known_dates = {ep["iso_date"] for ep in manifest}
+    known_titles = {normalize_title(ep["title"]) for ep in manifest}
 
     try:
         apple_episodes = fetch_apple_episodes()
     except Exception as e:
         print(f"Could not fetch Apple episode list: {e}", file=sys.stderr)
         sys.exit(0)  # don't fail the whole workflow over a transient network hiccup
-
-    # YouTube is now only consulted to find a video_id to embed alongside the
-    # Apple-sourced text — matched by release date, since titles often differ
-    # slightly between platforms (confirmed while building this site).
-    try:
-        yt_entries = parse_entries(fetch_feed())
-    except Exception as e:
-        print(f"Could not fetch YouTube playlist feed (non-fatal): {e}", file=sys.stderr)
-        yt_entries = []
-
-    def find_youtube_match(apple_release_date):
-        try:
-            apple_day = datetime.fromisoformat(apple_release_date.replace("Z", "+00:00")).date()
-        except ValueError:
-            return None
-        best = None
-        best_diff = None
-        for e in yt_entries:
-            if e["video_id"] in EXCLUDED_VIDEO_IDS:
-                continue
-            try:
-                yt_day = datetime.fromisoformat(e["published"].replace("Z", "+00:00")).date()
-            except ValueError:
-                continue
-            diff = abs((yt_day - apple_day).days)
-            if diff <= 1 and (best_diff is None or diff < best_diff):
-                best, best_diff = e, diff
-        return best["video_id"] if best else None
 
     def apple_iso_date(ep_data):
         try:
@@ -546,7 +485,9 @@ def main():
             return None
 
     new_apple_episodes = [
-        ep for ep in apple_episodes if apple_iso_date(ep) not in known_dates
+        ep for ep in apple_episodes
+        if apple_iso_date(ep) not in known_dates
+        and normalize_title(ep["trackName"]) not in known_titles
     ]
     # oldest-to-newest so the manifest stays chronological when appending
     new_apple_episodes.sort(key=lambda ep: ep.get("releaseDate", ""))
@@ -567,7 +508,6 @@ def main():
 
         date_display, iso_date = format_date(ep_data.get("releaseDate", ""))
         meta_desc = (ep_data.get("shortDescription") or ep_data.get("description") or ep_data["trackName"])[:250]
-        video_id = find_youtube_match(ep_data.get("releaseDate", ""))
 
         ep = {
             "slug": slug,
@@ -578,7 +518,6 @@ def main():
             "duration": format_duration(ep_data.get("trackTimeMillis")),
             "source": None,
             "spotify_id": None,
-            "video_id": video_id,
             "apple_url": ep_data.get("trackViewUrl"),
             "content_html": apple_description_to_html(ep_data.get("description", "")),
         }
