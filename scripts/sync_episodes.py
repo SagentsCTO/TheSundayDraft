@@ -2,21 +2,26 @@
 """
 Checks Apple Podcasts for episodes that don't have a show-notes page yet,
 and generates one for each — plus regenerates the episode archive, the
-homepage's "Latest episode" link/blurb, and sitemap.xml.
+homepage's "Latest episode" link/blurb, the homepage's "What we cover" topic
+cards (from YouTube playlists), and sitemap.xml.
 
 This site intentionally does not embed any video or YouTube content on
 episode pages — those pages exist to mirror what actually went out on
-Apple/Substack (audio show notes only). The homepage's video is a separate,
-static YouTube playlist embed unrelated to this script.
+Apple/Substack (audio show notes only). The homepage's "Latest episode"
+video and the "What we cover" topic cards are the only two places YouTube
+data is used, and both are purely homepage decoration, unrelated to the
+episode pages/archive/sitemap built from Apple.
 
 Runs stdlib-only (no pip install needed) so it's cheap and reliable inside
-GitHub Actions. Safe to run repeatedly: does nothing if there's nothing new.
+GitHub Actions. Safe to run repeatedly: does nothing new if there's nothing
+new on either Apple or the YouTube playlists.
 """
 import json
 import os
 import re
 import sys
 import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 
@@ -32,6 +37,34 @@ APPLE_PODCAST_ID = "1887351307"
 APPLE_LOOKUP_URL = (
     f"https://itunes.apple.com/lookup?id={APPLE_PODCAST_ID}&entity=podcastEpisode&limit=200"
 )
+
+# "Full Episodes" playlist — drives the static video embed at the top of the
+# homepage (that embed itself isn't touched by this script; it's just used
+# here as the de-dupe reference for the topic cards below).
+FULL_EPISODES_PLAYLIST_ID = "PLCxPsA1wKBkk"
+
+# "What we cover" homepage section: one card per topic, each showing the
+# latest video from that topic's YouTube playlist. If a topic's latest video
+# is the same one currently playing as "Latest episode" (i.e. it's also the
+# newest video in FULL_EPISODES_PLAYLIST_ID), that topic shows its
+# second-newest video instead, so the homepage doesn't show the same video
+# twice. If a playlist only has one video, it's shown anyway (duplicate
+# allowed rather than leaving the card empty).
+TOPIC_PLAYLISTS = [
+    ("AI &amp; The Future of Work", "PLVmSsoYIlm7dKQL7SWS5IOd4NPJ61F229"),
+    ("Society &amp; Human Stories", "PLVmSsoYIlm7cAij4-Gxu6y2lE_JgmKMl2"),
+    ("Travel &amp; Adventure", "PLVmSsoYIlm7c1lXP2-v3GSEsJPzlSVQY-"),
+    ("Mind &amp; Mental Health", "PLVmSsoYIlm7f05dwPLplRNTThxos7VI0z"),
+    ("Conflict &amp; Culture", "PLVmSsoYIlm7dgcyVQP3_TyJbnk0waCS2G"),
+    ("The Story So Far", "PLVmSsoYIlm7fRdyckDE9qeSnPOPkwlAer"),
+    ("Immigration &amp; Social Justice", "PLVmSsoYIlm7fNId81zIHbsrfoS35HgGPA"),
+    ("The Child Brain Trap", "PLVmSsoYIlm7du9oF7ebTb2HYwZsvsUw4O"),
+]
+
+YT_NS = {
+    "atom": "http://www.w3.org/2005/Atom",
+    "yt": "http://www.youtube.com/xml/schemas/2015",
+}
 
 # Show-level (not episode-level) follow links, used for the "Follow on X" nudge
 # under embedded players — plays via the embed don't register as a follow on
@@ -55,6 +88,98 @@ def fetch_apple_episodes():
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     return [r for r in data.get("results", []) if r.get("wrapperType") == "podcastEpisode"]
+
+
+def fetch_playlist_entries(playlist_id, limit=5):
+    """Newest-first list of {video_id, title} for a YouTube playlist, via its
+    public RSS feed (no API key needed — same mechanism used everywhere else
+    in this script). Returns [] on any fetch/parse failure rather than
+    raising, since a single broken topic playlist shouldn't take down the
+    rest of the sync."""
+    url = f"https://www.youtube.com/feeds/videos.xml?playlist_id={playlist_id}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            root = ET.fromstring(resp.read())
+    except Exception as e:
+        print(f"Could not fetch playlist {playlist_id}: {e}", file=sys.stderr)
+        return []
+
+    entries = []
+    for entry in root.findall("atom:entry", YT_NS):
+        video_id = entry.findtext("yt:videoId", default="", namespaces=YT_NS)
+        title = entry.findtext("atom:title", default="", namespaces=YT_NS)
+        published = entry.findtext("atom:published", default="", namespaces=YT_NS)
+        if video_id and title:
+            entries.append({"video_id": video_id, "title": title.strip(), "published": published})
+    entries.sort(key=lambda e: e["published"], reverse=True)
+    return entries[:limit]
+
+
+TOPIC_CARD_TMPL = """        <a class="topic-card" href="https://www.youtube.com/watch?v={video_id}" target="_blank" rel="noopener">
+          <img class="topic-thumb" src="https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" alt="" loading="lazy">
+          <span class="topic-label">{label}</span>
+          <h3>{title}</h3>
+        </a>"""
+
+
+def build_topics_grid_html():
+    """One card per TOPIC_PLAYLISTS entry, showing each playlist's newest
+    video — unless that video is the same one currently featured as the
+    homepage's 'Latest episode' (the newest video in
+    FULL_EPISODES_PLAYLIST_ID), in which case that topic falls back to its
+    second-newest video instead, so the homepage doesn't show the same video
+    twice. If a topic playlist has only one video, it's shown regardless
+    (duplicate allowed rather than an empty card).
+
+    Returns None (not a partial result) if ANY playlist — including the
+    Full Episodes one used for de-dupe — fails to fetch. A half-built grid
+    (e.g. 3 of 8 cards) would be worse than leaving the homepage untouched:
+    it would silently drop topics rather than fail loudly, and the missing
+    cards wouldn't come back until the next successful run overwrote them."""
+    latest_entries = fetch_playlist_entries(FULL_EPISODES_PLAYLIST_ID, limit=1)
+    if not latest_entries:
+        print("Full Episodes playlist unreachable — aborting topics-grid update.", file=sys.stderr)
+        return None
+    latest_video_id = latest_entries[0]["video_id"]
+
+    cards = []
+    for label, playlist_id in TOPIC_PLAYLISTS:
+        entries = fetch_playlist_entries(playlist_id, limit=2)
+        if not entries:
+            print(f"Playlist for '{label}' unreachable/empty — aborting topics-grid update.", file=sys.stderr)
+            return None
+        chosen = entries[0]
+        if chosen["video_id"] == latest_video_id and len(entries) > 1:
+            chosen = entries[1]
+        cards.append(
+            TOPIC_CARD_TMPL.format(video_id=chosen["video_id"], label=label, title=chosen["title"])
+        )
+    return "\n".join(cards)
+
+
+def update_topics_grid():
+    with open(INDEX_PATH, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    grid_html = build_topics_grid_html()
+    if grid_html is None:
+        print("Leaving 'What we cover' unchanged this run.", file=sys.stderr)
+        return
+
+    new_html, n = re.subn(
+        r'(<!-- TOPICS-GRID-START -->).*?(\s*<!-- TOPICS-GRID-END -->)',
+        lambda m: f'{m.group(1)}\n{grid_html}{m.group(2)}',
+        html,
+        flags=re.S,
+    )
+    if n == 0:
+        print("TOPICS-GRID markers not found in index.html — skipping.", file=sys.stderr)
+        return
+
+    with open(INDEX_PATH, "w", encoding="utf-8") as f:
+        f.write(new_html)
+    print("Updated 'What we cover' topic cards.")
 
 
 TIMESTAMP_LINE_RE = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?\s*[–—-]")
@@ -493,9 +618,20 @@ def main():
     new_apple_episodes.sort(key=lambda ep: ep.get("releaseDate", ""))
 
     if not new_apple_episodes:
-        print("No new episodes found. Nothing to do.")
-        return
+        print("No new episodes found on Apple.")
+        added = []
+    else:
+        added = sync_new_episodes(manifest, known_slugs, new_apple_episodes)
 
+    # "What we cover" runs every time, independent of whether Apple had a new
+    # episode — it depends on YouTube playlist activity, which has its own
+    # cadence unrelated to when new episodes get published.
+    update_topics_grid()
+
+    print(f"Added {len(added)} new episode(s).")
+
+
+def sync_new_episodes(manifest, known_slugs, new_apple_episodes):
     added = []
     for ep_data in new_apple_episodes:
         slug = slugify(ep_data["trackName"])
@@ -548,7 +684,7 @@ def main():
     newest = max(manifest, key=lambda ep: ep["iso_date"])
     update_homepage(newest)
 
-    print(f"Added {len(added)} new episode(s).")
+    return added
 
 
 if __name__ == "__main__":
