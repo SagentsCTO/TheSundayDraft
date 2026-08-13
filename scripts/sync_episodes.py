@@ -25,6 +25,26 @@ SITEMAP_PATH = os.path.join(ROOT, "sitemap.xml")
 PLAYLIST_ID = "PLCxPsA1wKBkk"  # "Full Episodes" playlist — Shorts are never added here
 FEED_URL = f"https://www.youtube.com/feeds/videos.xml?playlist_id={PLAYLIST_ID}"
 
+# Apple's iTunes Lookup API is the primary source for new episodes now: it
+# carries the full, real show-notes text (unlike YouTube's RSS, which has no
+# usable description field), and isn't capped the way the raw Substack/Apple
+# RSS feed is. The YouTube "Full Episodes" playlist is only consulted
+# afterward, to find a matching video_id for the embed.
+APPLE_PODCAST_ID = "1887351307"
+APPLE_LOOKUP_URL = (
+    f"https://itunes.apple.com/lookup?id={APPLE_PODCAST_ID}&entity=podcastEpisode&limit=200"
+)
+
+# Videos that exist on the "Full Episodes" YouTube playlist but are
+# deliberately kept off the site: they were never real Apple/Substack
+# episodes (livestream clips with no real show notes), so switching the
+# primary source to Apple already keeps them from being auto-added. This is
+# just a belt-and-suspenders backstop in case that ever changes.
+EXCLUDED_VIDEO_IDS = {
+    "3I80QjKo7ic",  # Surviving the HARDEST Days to Everest Base Camp (EBC Part 2)
+    "YJxedOV_-MU",  # The Collapse of Diplomacy - Is It Dead?
+}
+
 # Show-level (not episode-level) follow links, used for the "Follow on X" nudge
 # under embedded players — plays via the embed don't register as a follow on
 # either platform, so this is a one-click way for listeners to actually
@@ -72,6 +92,74 @@ def parse_entries(xml_bytes):
     # newest first, by published date
     entries.sort(key=lambda e: e["published"], reverse=True)
     return entries
+
+
+def fetch_apple_episodes():
+    """Full episode list (title + complete description text) straight from
+    Apple's iTunes Lookup API. Returns only the podcastEpisode entries (the
+    first result is the show itself, not an episode)."""
+    req = urllib.request.Request(APPLE_LOOKUP_URL, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return [r for r in data.get("results", []) if r.get("wrapperType") == "podcastEpisode"]
+
+
+TIMESTAMP_LINE_RE = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?\s*[–—-]")
+SUBSTACK_FOOTER_RE = re.compile(
+    r"\s*This is a public episode\. If you would like to discuss this with other subscribers.*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def apple_description_to_html(raw_description):
+    """Converts Apple's raw episode description text into the same
+    paragraph/list/heading HTML structure used across the rest of the site,
+    instead of dumping it in as one unbroken blob."""
+    text = SUBSTACK_FOOTER_RE.sub("", raw_description or "").strip()
+    lines = [l.strip() for l in text.split("\n")]
+
+    blocks = []
+    for line in lines:
+        if not line:
+            continue
+        if line.startswith("* "):
+            blocks.append(("li", line[2:].strip()))
+        elif TIMESTAMP_LINE_RE.match(line):
+            blocks.append(("li", line))
+        elif (line.isupper() and 3 < len(line) < 70) or (
+            line.endswith(":") and len(line) < 70 and not line[:1].islower()
+        ):
+            blocks.append(("h", line))
+        else:
+            blocks.append(("p", line))
+
+    html_parts = []
+    cur_list = []
+
+    def flush_list():
+        nonlocal cur_list
+        if cur_list:
+            html_parts.append("<ul>" + "".join(f"<li>{x}</li>" for x in cur_list) + "</ul>")
+            cur_list = []
+
+    for kind, txt in blocks:
+        if kind == "li":
+            cur_list.append(txt)
+        else:
+            flush_list()
+            html_parts.append(f"<p><strong>{txt}</strong></p>" if kind == "h" else f"<p>{txt}</p>")
+    flush_list()
+    return "\n".join(html_parts)
+
+
+def format_duration(track_time_millis):
+    if not track_time_millis:
+        return None
+    total_min = round(track_time_millis / 60000)
+    hours, minutes = divmod(total_min, 60)
+    if hours:
+        return f"{hours} hr {minutes} min" if minutes else f"{hours} hr"
+    return f"{minutes} min"
 
 
 def slugify(title):
@@ -407,27 +495,69 @@ def update_homepage(latest_ep):
 def main():
     with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
         manifest = json.load(f)
-    known_ids = {ep.get("video_id") for ep in manifest if ep.get("video_id")}
     known_slugs = {ep["slug"] for ep in manifest}
+    # Matching "already have this episode" by slugified title is unreliable:
+    # several existing entries were hand-trimmed to shorter slugs than what
+    # slugify(Apple's raw trackName) produces (subtitles, emoji prefixes,
+    # quote marks, etc. all differ). Release date is a far more reliable key
+    # for a weekly show — two real episodes essentially never share a date.
+    known_dates = {ep["iso_date"] for ep in manifest}
 
     try:
-        xml_bytes = fetch_feed()
+        apple_episodes = fetch_apple_episodes()
     except Exception as e:
-        print(f"Could not fetch playlist feed: {e}", file=sys.stderr)
+        print(f"Could not fetch Apple episode list: {e}", file=sys.stderr)
         sys.exit(0)  # don't fail the whole workflow over a transient network hiccup
 
-    entries = parse_entries(xml_bytes)
-    new_entries = [e for e in entries if e["video_id"] not in known_ids]
-    # oldest-to-newest so the manifest stays chronological when appending
-    new_entries.reverse()
+    # YouTube is now only consulted to find a video_id to embed alongside the
+    # Apple-sourced text — matched by release date, since titles often differ
+    # slightly between platforms (confirmed while building this site).
+    try:
+        yt_entries = parse_entries(fetch_feed())
+    except Exception as e:
+        print(f"Could not fetch YouTube playlist feed (non-fatal): {e}", file=sys.stderr)
+        yt_entries = []
 
-    if not new_entries:
+    def find_youtube_match(apple_release_date):
+        try:
+            apple_day = datetime.fromisoformat(apple_release_date.replace("Z", "+00:00")).date()
+        except ValueError:
+            return None
+        best = None
+        best_diff = None
+        for e in yt_entries:
+            if e["video_id"] in EXCLUDED_VIDEO_IDS:
+                continue
+            try:
+                yt_day = datetime.fromisoformat(e["published"].replace("Z", "+00:00")).date()
+            except ValueError:
+                continue
+            diff = abs((yt_day - apple_day).days)
+            if diff <= 1 and (best_diff is None or diff < best_diff):
+                best, best_diff = e, diff
+        return best["video_id"] if best else None
+
+    def apple_iso_date(ep_data):
+        try:
+            return datetime.fromisoformat(
+                ep_data.get("releaseDate", "").replace("Z", "+00:00")
+            ).strftime("%Y-%m-%d")
+        except ValueError:
+            return None
+
+    new_apple_episodes = [
+        ep for ep in apple_episodes if apple_iso_date(ep) not in known_dates
+    ]
+    # oldest-to-newest so the manifest stays chronological when appending
+    new_apple_episodes.sort(key=lambda ep: ep.get("releaseDate", ""))
+
+    if not new_apple_episodes:
         print("No new episodes found. Nothing to do.")
         return
 
     added = []
-    for e in new_entries:
-        slug = slugify(e["title"])
+    for ep_data in new_apple_episodes:
+        slug = slugify(ep_data["trackName"])
         base_slug = slug
         n = 2
         while slug in known_slugs:
@@ -435,21 +565,22 @@ def main():
             n += 1
         known_slugs.add(slug)
 
-        date_display, iso_date = format_date(e["published"])
-        paragraphs = clean_description(e["description"]) or [e["title"]]
-        meta_desc = paragraphs[0][:250]
+        date_display, iso_date = format_date(ep_data.get("releaseDate", ""))
+        meta_desc = (ep_data.get("shortDescription") or ep_data.get("description") or ep_data["trackName"])[:250]
+        video_id = find_youtube_match(ep_data.get("releaseDate", ""))
 
         ep = {
             "slug": slug,
-            "title": e["title"],
+            "title": ep_data["trackName"],
             "meta_desc": meta_desc,
             "date_display": date_display,
             "iso_date": iso_date,
-            "duration": None,
-            "source": "youtube",
+            "duration": format_duration(ep_data.get("trackTimeMillis")),
+            "source": None,
             "spotify_id": None,
-            "video_id": e["video_id"],
-            "body_paragraphs": paragraphs,
+            "video_id": video_id,
+            "apple_url": ep_data.get("trackViewUrl"),
+            "content_html": apple_description_to_html(ep_data.get("description", "")),
         }
         manifest.append(ep)
         added.append(ep)
@@ -457,10 +588,13 @@ def main():
         page_html = render_episode_page(ep)
         with open(os.path.join(EPISODES_DIR, f"{slug}.html"), "w", encoding="utf-8") as f:
             f.write(page_html)
-        print(f"Generated episodes/{slug}.html for: {e['title']}")
+        print(f"Generated episodes/{slug}.html for: {ep_data['trackName']}")
 
-    # persist manifest without the transient body_paragraphs bloating it unnecessarily is fine to keep;
-    # it's useful context for future runs/debugging, so we keep it.
+    # Always keep the manifest sorted oldest-to-newest by date, rather than
+    # relying on append order — otherwise newly-added (possibly older,
+    # backfilled) episodes land at the wrong spot in the archive/sitemap.
+    manifest.sort(key=lambda ep: ep["iso_date"])
+
     with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
         f.write("\n")
