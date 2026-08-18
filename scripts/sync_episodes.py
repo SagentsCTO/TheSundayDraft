@@ -555,13 +555,29 @@ def render_sitemap(manifest):
     return "\n".join(lines) + "\n"
 
 
+def first_paragraph_text(content_html):
+    """Plain-text first <p>...</p> out of an episode's full show notes HTML,
+    with any inner tags (like <strong>) stripped. Used for the homepage
+    blurb so it shows the real, untruncated opening paragraph from Apple's
+    full description — not the shortDescription field, which Apple itself
+    caps at ~250 characters server-side with no ellipsis."""
+    if not content_html:
+        return None
+    m = re.search(r"<p>(.*?)</p>", content_html, re.S)
+    if not m:
+        return None
+    return re.sub(r"<[^>]+>", "", m.group(1)).strip()
+
+
 def update_homepage(latest_ep):
     with open(INDEX_PATH, "r", encoding="utf-8") as f:
         html = f.read()
 
-    blurb = " ".join(latest_ep.get("body_paragraphs", [latest_ep["meta_desc"]])[:1])
-    if len(blurb) > 320:
-        blurb = blurb[:317].rsplit(" ", 1)[0] + "…"
+    blurb = (
+        first_paragraph_text(latest_ep.get("content_html"))
+        or " ".join(latest_ep.get("body_paragraphs", [latest_ep["meta_desc"]])[:1])
+        or latest_ep["meta_desc"]
+    )
 
     html = re.sub(
         r'(<!-- LATEST-BLURB-START -->).*?(<!-- LATEST-BLURB-END -->)',
