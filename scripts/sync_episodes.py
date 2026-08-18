@@ -50,16 +50,19 @@ APPLE_LOOKUP_URL = (
 # here as the de-dupe reference for the topic cards below).
 FULL_EPISODES_PLAYLIST_ID = "PLCxPsA1wKBkk"
 
+# YouTube auto-generates this playlist from the podcast RSS feed (audio-only
+# episodes) — it's not a hand-curated topic and shouldn't show up as one.
+AUDIO_RSS_PLAYLIST_ID = "PLVmSsoYIlm7fbnYQh4ZGK8M-l3KNtk1iX"
+
 # "What we cover" homepage section: one card per topic playlist on the
 # channel, each showing the latest video from that playlist. The list of
 # topic playlists is no longer hardcoded — it's discovered automatically
 # from the channel via the YouTube Data API (see fetch_channel_playlists()),
 # so a newly created playlist shows up on its own, no code change needed.
-# The "Full Episodes" playlist itself is excluded from the topic cards
-# since it's the main feed, not a topic (add other playlist IDs here too,
-# e.g. Shorts/Livestreams, if the channel ever has a playlist that
-# shouldn't be treated as a "topic").
-EXCLUDED_TOPIC_PLAYLIST_IDS = {FULL_EPISODES_PLAYLIST_ID}
+# The playlists below are excluded from the topic cards since they aren't
+# "topics" (add other playlist IDs here too, e.g. Shorts/Livestreams, if the
+# channel ever gets a playlist that shouldn't be treated as a topic).
+EXCLUDED_TOPIC_PLAYLIST_IDS = {FULL_EPISODES_PLAYLIST_ID, AUDIO_RSS_PLAYLIST_ID}
 
 # Handle used to resolve the channel ID via the Data API (channels.list
 # ?forHandle=...). Matches the @handle already used in the site's YouTube
