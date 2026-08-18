@@ -15,7 +15,14 @@ episode pages/archive/sitemap built from Apple.
 Runs stdlib-only (no pip install needed) so it's cheap and reliable inside
 GitHub Actions. Safe to run repeatedly: does nothing new if there's nothing
 new on either Apple or the YouTube playlists.
+
+The "What we cover" topic cards require a YOUTUBE_API_KEY environment
+variable (a YouTube Data API v3 key, used only to auto-discover the
+channel's playlists — see fetch_channel_playlists()). If it's not set, that
+section of the update is skipped for the run (everything else — Apple sync,
+archive, sitemap — still runs normally).
 """
+import html
 import json
 import os
 import re
@@ -43,23 +50,21 @@ APPLE_LOOKUP_URL = (
 # here as the de-dupe reference for the topic cards below).
 FULL_EPISODES_PLAYLIST_ID = "PLCxPsA1wKBkk"
 
-# "What we cover" homepage section: one card per topic, each showing the
-# latest video from that topic's YouTube playlist. If a topic's latest video
-# is the same one currently playing as "Latest episode" (i.e. it's also the
-# newest video in FULL_EPISODES_PLAYLIST_ID), that topic shows its
-# second-newest video instead, so the homepage doesn't show the same video
-# twice. If a playlist only has one video, it's shown anyway (duplicate
-# allowed rather than leaving the card empty).
-TOPIC_PLAYLISTS = [
-    ("AI &amp; The Future of Work", "PLVmSsoYIlm7dKQL7SWS5IOd4NPJ61F229"),
-    ("Society &amp; Human Stories", "PLVmSsoYIlm7cAij4-Gxu6y2lE_JgmKMl2"),
-    ("Travel &amp; Adventure", "PLVmSsoYIlm7c1lXP2-v3GSEsJPzlSVQY-"),
-    ("Mind &amp; Mental Health", "PLVmSsoYIlm7f05dwPLplRNTThxos7VI0z"),
-    ("Conflict &amp; Culture", "PLVmSsoYIlm7dgcyVQP3_TyJbnk0waCS2G"),
-    ("The Story So Far", "PLVmSsoYIlm7fRdyckDE9qeSnPOPkwlAer"),
-    ("Immigration &amp; Social Justice", "PLVmSsoYIlm7fNId81zIHbsrfoS35HgGPA"),
-    ("The Child Brain Trap", "PLVmSsoYIlm7du9oF7ebTb2HYwZsvsUw4O"),
-]
+# "What we cover" homepage section: one card per topic playlist on the
+# channel, each showing the latest video from that playlist. The list of
+# topic playlists is no longer hardcoded — it's discovered automatically
+# from the channel via the YouTube Data API (see fetch_channel_playlists()),
+# so a newly created playlist shows up on its own, no code change needed.
+# The "Full Episodes" playlist itself is excluded from the topic cards
+# since it's the main feed, not a topic (add other playlist IDs here too,
+# e.g. Shorts/Livestreams, if the channel ever has a playlist that
+# shouldn't be treated as a "topic").
+EXCLUDED_TOPIC_PLAYLIST_IDS = {FULL_EPISODES_PLAYLIST_ID}
+
+# Handle used to resolve the channel ID via the Data API (channels.list
+# ?forHandle=...). Matches the @handle already used in the site's YouTube
+# links.
+YOUTUBE_HANDLE = "TheSundayDraft"
 
 YT_NS = {
     "atom": "http://www.w3.org/2005/Atom",
@@ -123,20 +128,101 @@ TOPIC_CARD_TMPL = """        <a class="topic-card" href="https://www.youtube.com
         </a>"""
 
 
-def build_topics_grid_html():
-    """One card per TOPIC_PLAYLISTS entry, showing each playlist's newest
-    video — unless that video is the same one currently featured as the
-    homepage's 'Latest episode' (the newest video in
-    FULL_EPISODES_PLAYLIST_ID), in which case that topic falls back to its
-    second-newest video instead, so the homepage doesn't show the same video
-    twice. If a topic playlist has only one video, it's shown regardless
-    (duplicate allowed rather than an empty card).
+def fetch_channel_id(api_key):
+    """Resolves the channel's numeric ID (UC...) from its @handle via the
+    YouTube Data API. Needed because playlists.list requires a channelId,
+    not a handle. Returns None on any failure."""
+    url = (
+        "https://www.googleapis.com/youtube/v3/channels"
+        f"?part=id&forHandle={YOUTUBE_HANDLE}&key={api_key}"
+    )
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        print(f"Could not resolve channel ID for @{YOUTUBE_HANDLE}: {e}", file=sys.stderr)
+        return None
+    items = data.get("items", [])
+    if not items:
+        print(f"No channel found for handle @{YOUTUBE_HANDLE}.", file=sys.stderr)
+        return None
+    return items[0]["id"]
 
-    Returns None (not a partial result) if ANY playlist — including the
-    Full Episodes one used for de-dupe — fails to fetch. A half-built grid
-    (e.g. 3 of 8 cards) would be worse than leaving the homepage untouched:
-    it would silently drop topics rather than fail loudly, and the missing
+
+def fetch_channel_playlists(api_key):
+    """Every playlist on the channel (paginated), via the YouTube Data API,
+    minus anything in EXCLUDED_TOPIC_PLAYLIST_IDS. This replaces the old
+    hardcoded TOPIC_PLAYLISTS list — a new playlist created on the channel
+    shows up here automatically, no code change needed. Sorted newest-
+    created-first, so a freshly made playlist appears at the front of
+    'What we cover'. Returns None on any failure (distinct from an empty
+    list, which is a valid — if unusual — "no topic playlists" result)."""
+    channel_id = fetch_channel_id(api_key)
+    if not channel_id:
+        return None
+
+    playlists = []
+    page_token = ""
+    try:
+        while True:
+            url = (
+                "https://www.googleapis.com/youtube/v3/playlists"
+                f"?part=snippet&channelId={channel_id}&maxResults=50&key={api_key}"
+                + (f"&pageToken={page_token}" if page_token else "")
+            )
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            for item in data.get("items", []):
+                pid = item.get("id")
+                snippet = item.get("snippet", {})
+                if not pid or pid in EXCLUDED_TOPIC_PLAYLIST_IDS:
+                    continue
+                playlists.append({
+                    "id": pid,
+                    "title": snippet.get("title", "").strip(),
+                    "published": snippet.get("publishedAt", ""),
+                })
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+    except Exception as e:
+        print(f"Could not fetch channel playlists: {e}", file=sys.stderr)
+        return None
+
+    playlists.sort(key=lambda p: p["published"], reverse=True)
+    return playlists
+
+
+def build_topics_grid_html():
+    """One card per playlist discovered on the channel (via the YouTube
+    Data API), showing each playlist's newest video — unless that video is
+    the same one currently featured as the homepage's 'Latest episode' (the
+    newest video in FULL_EPISODES_PLAYLIST_ID), in which case that topic
+    falls back to its second-newest video instead, so the homepage doesn't
+    show the same video twice. If a topic playlist has only one video, it's
+    shown regardless (duplicate allowed rather than an empty card).
+
+    Returns None (not a partial result) if the API key is missing, the
+    channel/playlist list can't be fetched, or ANY individual playlist
+    (including the Full Episodes one used for de-dupe) fails to fetch. A
+    half-built grid would be worse than leaving the homepage untouched: it
+    would silently drop topics rather than fail loudly, and the missing
     cards wouldn't come back until the next successful run overwrote them."""
+    api_key = os.environ.get("YOUTUBE_API_KEY")
+    if not api_key:
+        print("YOUTUBE_API_KEY not set — aborting topics-grid update.", file=sys.stderr)
+        return None
+
+    topic_playlists = fetch_channel_playlists(api_key)
+    if topic_playlists is None:
+        print("Could not fetch channel playlists — aborting topics-grid update.", file=sys.stderr)
+        return None
+    if not topic_playlists:
+        print("No topic playlists found on channel — aborting topics-grid update.", file=sys.stderr)
+        return None
+
     latest_entries = fetch_playlist_entries(FULL_EPISODES_PLAYLIST_ID, limit=1)
     if not latest_entries:
         print("Full Episodes playlist unreachable — aborting topics-grid update.", file=sys.stderr)
@@ -144,16 +230,20 @@ def build_topics_grid_html():
     latest_video_id = latest_entries[0]["video_id"]
 
     cards = []
-    for label, playlist_id in TOPIC_PLAYLISTS:
-        entries = fetch_playlist_entries(playlist_id, limit=2)
+    for pl in topic_playlists:
+        entries = fetch_playlist_entries(pl["id"], limit=2)
         if not entries:
-            print(f"Playlist for '{label}' unreachable/empty — aborting topics-grid update.", file=sys.stderr)
+            print(f"Playlist '{pl['title']}' unreachable/empty — aborting topics-grid update.", file=sys.stderr)
             return None
         chosen = entries[0]
         if chosen["video_id"] == latest_video_id and len(entries) > 1:
             chosen = entries[1]
         cards.append(
-            TOPIC_CARD_TMPL.format(video_id=chosen["video_id"], label=label, title=chosen["title"])
+            TOPIC_CARD_TMPL.format(
+                video_id=chosen["video_id"],
+                label=html.escape(pl["title"]),
+                title=html.escape(chosen["title"]),
+            )
         )
     return "\n".join(cards)
 
@@ -639,6 +729,21 @@ def main():
     else:
         added = sync_new_episodes(manifest, known_slugs, new_apple_episodes)
 
+    # The homepage "Latest episode" blurb/link is regenerated from whatever
+    # the manifest's newest episode is on EVERY run, not just runs that add
+    # a new one. It used to only be refreshed inside sync_new_episodes(),
+    # which meant a logic change to how the blurb is built (e.g. pulling the
+    # full first paragraph instead of the truncated meta_desc) wouldn't take
+    # effect until the next brand-new episode synced — so an already-synced
+    # "latest" episode kept showing whatever the old code wrote, even after
+    # the fix shipped and a manual re-run was tried. Running this
+    # unconditionally means the homepage always reflects the current script
+    # logic against the current newest episode, and is a no-op (rewrites the
+    # same content) when nothing's actually changed.
+    if manifest:
+        newest = max(manifest, key=lambda ep: ep["iso_date"])
+        update_homepage(newest)
+
     # "What we cover" runs every time, independent of whether Apple had a new
     # episode — it depends on YouTube playlist activity, which has its own
     # cadence unrelated to when new episodes get published.
@@ -696,9 +801,8 @@ def sync_new_episodes(manifest, known_slugs, new_apple_episodes):
     with open(SITEMAP_PATH, "w", encoding="utf-8") as f:
         f.write(render_sitemap(list(reversed(manifest))))
 
-    # newest overall episode (by iso_date) drives the homepage blurb
-    newest = max(manifest, key=lambda ep: ep["iso_date"])
-    update_homepage(newest)
+    # Homepage blurb/link is now refreshed unconditionally in main() after
+    # this function returns, not here — see the comment there for why.
 
     return added
 
