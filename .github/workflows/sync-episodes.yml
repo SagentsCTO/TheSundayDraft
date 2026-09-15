@@ -4,6 +4,11 @@ on:
   schedule:
     # Runs weekly, Monday 14:00 UTC — the day after new Sunday episodes drop.
     - cron: "0 14 * * 1"
+  # Also runs right after every GitHub Pages build/deploy completes. If this
+  # run's sync finds and pushes changes, that push itself triggers another
+  # Pages build/page_build event — self-limiting, since the resulting rerun
+  # finds nothing left to sync and pushes nothing, so it stops there.
+  page_build: {}
   workflow_dispatch: {}  # lets you trigger it manually from the Actions tab to test
 
 permissions:
