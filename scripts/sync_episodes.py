@@ -261,19 +261,18 @@ def fetch_substack_descriptions():
     return by_title, by_date
 
 
-def fetch_playlist_entries(playlist_id, limit=5):
+def _fetch_playlist_entries_rss(playlist_id, limit=5):
     """Newest-first list of {video_id, title} for a YouTube playlist, via its
-    public RSS feed (no API key needed — same mechanism used everywhere else
-    in this script). Returns [] on any fetch/parse failure rather than
-    raising, since a single broken topic playlist shouldn't take down the
-    rest of the sync."""
+    informal public RSS feed (no API key needed). Returns [] on any
+    fetch/parse failure — including a 404, which YouTube returns for some
+    playlists (e.g. older short-format playlist IDs) even though the
+    playlist itself is public and works fine everywhere else on YouTube."""
     url = f"https://www.youtube.com/feeds/videos.xml?playlist_id={playlist_id}"
     try:
         req = urllib.request.Request(url, headers=BROWSER_HEADERS)
         with urllib.request.urlopen(req, timeout=30) as resp:
             root = ET.fromstring(resp.read())
-    except Exception as e:
-        print(f"Could not fetch playlist {playlist_id}: {e}", file=sys.stderr)
+    except Exception:
         return []
 
     entries = []
@@ -285,6 +284,73 @@ def fetch_playlist_entries(playlist_id, limit=5):
             entries.append({"video_id": video_id, "title": title.strip(), "published": published})
     entries.sort(key=lambda e: e["published"], reverse=True)
     return entries[:limit]
+
+
+def _fetch_playlist_entries_api(playlist_id, api_key, limit=5, fetch_count=50):
+    """Same shape of result as _fetch_playlist_entries_rss, via the official
+    YouTube Data API's playlistItems.list instead of the informal RSS feed.
+    Used as a fallback for playlists the RSS feed 404s on. Fetches up to
+    fetch_count items (a single page — comfortably more than any of this
+    channel's playlists currently hold) and sorts by each video's original
+    publish date (contentDetails.videoPublishedAt), so results are correct
+    regardless of the order items were added to the playlist. Returns [] on
+    any failure."""
+    url = (
+        "https://www.googleapis.com/youtube/v3/playlistItems"
+        f"?part=snippet,contentDetails&playlistId={playlist_id}&maxResults={fetch_count}&key={api_key}"
+    )
+    try:
+        req = urllib.request.Request(url, headers=BROWSER_HEADERS)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        print(f"Could not fetch playlist {playlist_id} via YouTube Data API: {e}", file=sys.stderr)
+        return []
+
+    entries = []
+    for item in data.get("items", []):
+        snippet = item.get("snippet", {})
+        content_details = item.get("contentDetails", {})
+        video_id = content_details.get("videoId") or snippet.get("resourceId", {}).get("videoId", "")
+        title = (snippet.get("title") or "").strip()
+        published = content_details.get("videoPublishedAt") or snippet.get("publishedAt", "")
+        # Skip items for videos that were deleted or made private after
+        # being added to the playlist — YouTube reports these with a
+        # placeholder title instead of omitting them.
+        if not video_id or not title or title in ("Deleted video", "Private video"):
+            continue
+        entries.append({"video_id": video_id, "title": title, "published": published})
+    entries.sort(key=lambda e: e["published"], reverse=True)
+    return entries[:limit]
+
+
+def fetch_playlist_entries(playlist_id, limit=5):
+    """Newest-first list of {video_id, title} for a YouTube playlist. Tries
+    the informal public RSS feed first (fast, no API key needed, and what
+    every playlist on this channel used successfully until one didn't).
+    Falls back to the official YouTube Data API (playlistItems.list, needs
+    YOUTUBE_API_KEY) when the RSS feed comes back empty — this is what
+    actually happens for this channel's "Full Episodes" playlist, whose
+    older short-format ID the RSS endpoint 404s on even though the playlist
+    is public and works everywhere else on YouTube. Returns [] only if
+    both sources fail (or the fallback isn't available)."""
+    entries = _fetch_playlist_entries_rss(playlist_id, limit)
+    if entries:
+        return entries
+
+    api_key = os.environ.get("YOUTUBE_API_KEY")
+    if not api_key:
+        print(
+            f"Could not fetch playlist {playlist_id} via RSS, and no "
+            "YOUTUBE_API_KEY set for the Data API fallback.",
+            file=sys.stderr,
+        )
+        return []
+
+    entries = _fetch_playlist_entries_api(playlist_id, api_key, limit)
+    if not entries:
+        print(f"Could not fetch playlist {playlist_id} via RSS or the Data API fallback.", file=sys.stderr)
+    return entries
 
 
 TOPIC_CARD_TMPL = """        <a class="topic-card" href="https://www.youtube.com/watch?v={video_id}" target="_blank" rel="noopener">
