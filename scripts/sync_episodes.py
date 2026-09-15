@@ -74,17 +74,25 @@ APPLE_LOOKUP_URL = (
 # everything else (release date, duration, the Apple embed URL), and is
 # still the text fallback for an episode this feed can't be matched to.
 #
-# api.substack.com specifically 403s this fetch when it runs from GitHub
-# Actions' shared runner IPs (confirmed from an actual failed run's log —
-# a realistic browser User-Agent didn't change the result, which rules out
-# a User-Agent check and points at an IP-reputation block instead, common
-# for hosts trying to deter scraping of API subdomains specifically).
-# SUBSTACK_FEED_URLS tries this one first, then falls back to the show's
-# main-site feed — a different subdomain, meant for public/human/search-
-# crawler consumption rather than API access, and so far not observed to
-# be blocked the same way. Substack cross-posts each podcast episode as a
-# regular post on the main site, so the fallback is expected (not yet
-# confirmed) to carry equivalent episode content.
+# CONFIRMED: both URLs in SUBSTACK_FEED_URLS 403 when fetched from GitHub
+# Actions' shared runner IPs, but succeed instantly (HTTP 200) fetched from
+# a normal residential/cloud IP with the exact same request — this is an
+# IP-reputation block on Substack's side, not a User-Agent check (already
+# ruled out) and not something either feed URL can dodge, since Substack
+# appears to block the shared runner IP range wholesale rather than per
+# subdomain. api.substack.com and the thesundaydraft.substack.com/feed
+# fallback were tried as two different subdomains hoping only one was
+# blocked; both are.
+#
+# Decision: not worth chasing further with more feed URLs or headers. CI
+# runs (GitHub Actions, scheduled/workflow_dispatch) are expected to warn
+# on every Substack fetch and fall back to Apple's Lookup API text for
+# every episode — see fetch_apple_episodes(). Apple's text still lags a
+# real edit by up to a day (see APPLE_LOOKUP_URL above), so if you want
+# same-day-fresh Substack text for a specific episode, run this script
+# locally/manually (`python3 scripts/sync_episodes.py`) from a normal
+# network — both URLs still work fine outside GitHub Actions, which is why
+# they're kept here rather than removed.
 SUBSTACK_RSS_URL = "https://api.substack.com/feed/podcast/8358073.rss"
 SUBSTACK_FALLBACK_RSS_URL = "https://thesundaydraft.substack.com/feed"
 SUBSTACK_FEED_URLS = [SUBSTACK_RSS_URL, SUBSTACK_FALLBACK_RSS_URL]
