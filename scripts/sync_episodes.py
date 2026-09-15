@@ -111,6 +111,29 @@ YT_NS = {
 SPOTIFY_SHOW_URL = "https://open.spotify.com/show/2EoiIdSHex4INCZVOmkU1F"
 APPLE_SHOW_URL = "https://podcasts.apple.com/us/podcast/the-sunday-draft/id1887351307"
 
+# A bare "Mozilla/5.0" (no browser/OS/engine details) is a well-known bot
+# signature — several real-world scrapers send exactly that string, so
+# services that bot-filter on User-Agent (Substack's feed host among them:
+# it returned a 403 to this fetch specifically when run from GitHub
+# Actions' shared runner IPs, while an identical request from a normal
+# residential IP succeeded) can and do reject it outright. A complete,
+# realistic desktop-browser string is the standard fix and costs nothing on
+# services that don't check it at all (Apple, YouTube), so it's used for
+# every fetch in this script, not just Substack's.
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+BROWSER_HEADERS = {"User-Agent": BROWSER_USER_AGENT}
+# Substack's feed specifically gets an Accept header on top of the shared
+# User-Agent — an RSS/XML Accept header on Apple's JSON endpoint or
+# YouTube's feeds risks changing behavior on integrations that already
+# work, for no known benefit, so it's scoped to just this one request.
+SUBSTACK_HEADERS = {
+    **BROWSER_HEADERS,
+    "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.7",
+}
+
 CTA_LINE_RE = re.compile(
     r"^(subscribe|follow|watch on|listen on|find us|referenced|timestamps?|"
     r"\d{1,2}:\d{2}|🎥|🎧|🎬|📖|🔗|▶️|📌|📣|⏱️|🎙️)",
@@ -125,7 +148,7 @@ def fetch_apple_episodes():
     episode metadata (release date, duration, Apple URL) and as the text
     fallback when an episode can't be matched in the Substack feed — see
     fetch_substack_descriptions(), which is the preferred text source."""
-    req = urllib.request.Request(APPLE_LOOKUP_URL, headers={"User-Agent": "Mozilla/5.0"})
+    req = urllib.request.Request(APPLE_LOOKUP_URL, headers=BROWSER_HEADERS)
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     return [r for r in data.get("results", []) if r.get("wrapperType") == "podcastEpisode"]
@@ -176,7 +199,7 @@ def fetch_substack_descriptions():
     episode in that case, same as before this existed, so a feed hiccup
     degrades freshness for one run rather than breaking the sync."""
     try:
-        req = urllib.request.Request(SUBSTACK_RSS_URL, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(SUBSTACK_RSS_URL, headers=SUBSTACK_HEADERS)
         with urllib.request.urlopen(req, timeout=30) as resp:
             root = ET.fromstring(resp.read())
     except Exception as e:
@@ -209,7 +232,7 @@ def fetch_playlist_entries(playlist_id, limit=5):
     rest of the sync."""
     url = f"https://www.youtube.com/feeds/videos.xml?playlist_id={playlist_id}"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(url, headers=BROWSER_HEADERS)
         with urllib.request.urlopen(req, timeout=30) as resp:
             root = ET.fromstring(resp.read())
     except Exception as e:
@@ -243,7 +266,7 @@ def fetch_channel_id(api_key):
         f"?part=id&forHandle={YOUTUBE_HANDLE}&key={api_key}"
     )
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(url, headers=BROWSER_HEADERS)
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception as e:
@@ -277,7 +300,7 @@ def fetch_channel_playlists(api_key):
                 f"?part=snippet&channelId={channel_id}&maxResults=50&key={api_key}"
                 + (f"&pageToken={page_token}" if page_token else "")
             )
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            req = urllib.request.Request(url, headers=BROWSER_HEADERS)
             with urllib.request.urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             for item in data.get("items", []):
