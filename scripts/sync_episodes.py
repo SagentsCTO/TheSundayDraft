@@ -73,7 +73,21 @@ APPLE_LOOKUP_URL = (
 # iTunes Lookup API's crawl lag. Apple's API remains the source for
 # everything else (release date, duration, the Apple embed URL), and is
 # still the text fallback for an episode this feed can't be matched to.
+#
+# api.substack.com specifically 403s this fetch when it runs from GitHub
+# Actions' shared runner IPs (confirmed from an actual failed run's log —
+# a realistic browser User-Agent didn't change the result, which rules out
+# a User-Agent check and points at an IP-reputation block instead, common
+# for hosts trying to deter scraping of API subdomains specifically).
+# SUBSTACK_FEED_URLS tries this one first, then falls back to the show's
+# main-site feed — a different subdomain, meant for public/human/search-
+# crawler consumption rather than API access, and so far not observed to
+# be blocked the same way. Substack cross-posts each podcast episode as a
+# regular post on the main site, so the fallback is expected (not yet
+# confirmed) to carry equivalent episode content.
 SUBSTACK_RSS_URL = "https://api.substack.com/feed/podcast/8358073.rss"
+SUBSTACK_FALLBACK_RSS_URL = "https://thesundaydraft.substack.com/feed"
+SUBSTACK_FEED_URLS = [SUBSTACK_RSS_URL, SUBSTACK_FALLBACK_RSS_URL]
 
 # "Full Episodes" playlist — drives the static video embed at the top of the
 # homepage (that embed itself isn't touched by this script; it's just used
@@ -181,9 +195,27 @@ def html_to_plain_text(desc_html):
     return "\n".join(lines).strip()
 
 
+def fetch_rss_items(url):
+    """Raw (title, description_html, pubDate) triples for every <item> in an
+    RSS feed at `url`. Raises on any fetch/parse failure — the caller
+    decides how to handle that (see fetch_substack_descriptions(), which
+    tries multiple feed URLs)."""
+    req = urllib.request.Request(url, headers=SUBSTACK_HEADERS)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        root = ET.fromstring(resp.read())
+    items = []
+    for item in root.findall(".//item"):
+        title = (item.findtext("title") or "").strip()
+        desc_html = item.findtext("description") or ""
+        pub_date = (item.findtext("pubDate") or "").strip()
+        if title and desc_html:
+            items.append((title, desc_html, pub_date))
+    return items
+
+
 def fetch_substack_descriptions():
     """Two lookups — (by_title, by_date), both {key: plain_text_description}
-    — straight from the show's own RSS feed: the actual source Apple/
+    — straight from the show's own RSS feed(s): the actual source Apple/
     Spotify/everyone else subscribes to, and the only one of the two that
     reflects a host's edit immediately rather than on Apple's own crawl
     schedule (see the comment on SUBSTACK_RSS_URL). by_date (keyed by
@@ -194,33 +226,38 @@ def fetch_substack_descriptions():
     this (Apple's Lookup API still showed the old title, but the Apple
     Podcasts app already showed a different one), and normalized-title
     matching, still done first, would silently miss this feed's fresher
-    text entirely in that case. Returns ({}, {}) on any fetch/parse failure
-    rather than raising — callers fall back to Apple's API text for every
-    episode in that case, same as before this existed, so a feed hiccup
-    degrades freshness for one run rather than breaking the sync."""
-    try:
-        req = urllib.request.Request(SUBSTACK_RSS_URL, headers=SUBSTACK_HEADERS)
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            root = ET.fromstring(resp.read())
-    except Exception as e:
-        print(f"Could not fetch Substack RSS feed: {e}", file=sys.stderr)
-        return {}, {}
+    text entirely in that case.
 
+    Tries every URL in SUBSTACK_FEED_URLS in order and merges their items
+    (a later URL's item overwrites an earlier one's only if they share the
+    same title/date key — not expected to matter in practice, since the
+    fallback exists for when the primary URL fails outright, not for when
+    both succeed with different content for the same episode). A URL that
+    fails to fetch/parse is skipped with a warning rather than aborting the
+    whole lookup — this is what makes the fallback actually useful; only
+    every URL failing returns ({}, {}), and callers fall back to Apple's API
+    text for every episode in that case, same as before this existed, so a
+    feed hiccup degrades freshness for one run rather than breaking the
+    sync."""
     by_title, by_date = {}, {}
-    for item in root.findall(".//item"):
-        title = (item.findtext("title") or "").strip()
-        desc_html = item.findtext("description") or ""
-        if not title or not desc_html:
+    any_succeeded = False
+    for url in SUBSTACK_FEED_URLS:
+        try:
+            items = fetch_rss_items(url)
+        except Exception as e:
+            print(f"Could not fetch Substack feed {url}: {e}", file=sys.stderr)
             continue
-        text = html_to_plain_text(desc_html)
-        by_title[normalize_title(title)] = text
-
-        pub_date = (item.findtext("pubDate") or "").strip()
-        if pub_date:
-            try:
-                by_date[parsedate_to_datetime(pub_date).strftime("%Y-%m-%d")] = text
-            except (TypeError, ValueError):
-                pass
+        any_succeeded = True
+        for title, desc_html, pub_date in items:
+            text = html_to_plain_text(desc_html)
+            by_title[normalize_title(title)] = text
+            if pub_date:
+                try:
+                    by_date[parsedate_to_datetime(pub_date).strftime("%Y-%m-%d")] = text
+                except (TypeError, ValueError):
+                    pass
+    if not any_succeeded:
+        print("Could not fetch any Substack feed URL.", file=sys.stderr)
     return by_title, by_date
 
 
