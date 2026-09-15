@@ -853,11 +853,25 @@ def main():
     known_dates = {ep["iso_date"] for ep in manifest}
     known_titles = {normalize_title(ep["title"]) for ep in manifest}
 
+    # A failure here is NOT allowed to abort the whole run anymore. It used
+    # to (sys.exit(0)) back when Apple's API was the only text source, so a
+    # failed fetch genuinely meant there was nothing to do. That's no longer
+    # true: Substack is now the primary text source and doesn't depend on
+    # this call at all, and Apple's iTunes Lookup API is known to fail
+    # intermittently from GitHub-hosted runners specifically (their shared
+    # IP ranges get rate-limited by third-party APIs) — confirmed by a
+    # sync run that made no changes on GitHub Actions immediately after an
+    # otherwise-identical local run found and refreshed 3 episodes. Treating
+    # this as fatal meant a flaky Apple API silently blocked the Substack
+    # refresh too, even though it doesn't need Apple to work at all. New-
+    # episode detection still needs Apple (trackViewUrl, duration, etc.), so
+    # that part is naturally skipped when this is empty, but the show-notes
+    # refresh for episodes already in the manifest is not.
     try:
         apple_episodes = fetch_apple_episodes()
     except Exception as e:
         print(f"Could not fetch Apple episode list: {e}", file=sys.stderr)
-        sys.exit(0)  # don't fail the whole workflow over a transient network hiccup
+        apple_episodes = []
 
     # Primary text source (see SUBSTACK_RSS_URL) — fetched once here and
     # threaded through both sync_new_episodes() and refresh_existing_episodes()
