@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
 """
-Checks Apple Podcasts for episodes that don't have a show-notes page yet,
-and generates one for each — plus regenerates the episode archive, the
-homepage's "Latest episode" link/blurb, the homepage's "What we cover" topic
-cards (from YouTube playlists), and sitemap.xml. Also re-checks every
-already-synced episode against Apple's current description and refreshes
-its show-notes page (and the homepage blurb, if it's the latest one) if the
-host has edited it on Apple since the original sync.
+Checks for episodes that don't have a show-notes page yet, and generates
+one for each — plus regenerates the episode archive, the homepage's
+"Latest episode" link/blurb, the homepage's "What we cover" topic cards
+(from YouTube playlists), and sitemap.xml. Also re-checks every
+already-synced episode against its current show notes and refreshes its
+page (and the homepage blurb, if it's the latest one) if the host has
+edited it since the original sync.
+
+Show-notes text comes from two sources: the show's own Substack RSS feed
+(SUBSTACK_RSS_URL) is preferred, since it reflects an edit immediately;
+Apple's iTunes Lookup API (APPLE_LOOKUP_URL) supplies everything else
+(release date, duration, an Apple Podcasts URL) and is the text fallback
+when an episode can't be matched in the Substack feed. Apple's API was
+originally the sole source, but it's a separate system from the Apple
+Podcasts app itself and can lag a day or more behind an edit — confirmed
+by comparing it against the app, which showed a correction this API still
+hadn't picked up.
 
 This site intentionally does not embed any video or YouTube content on
 episode pages — those pages exist to mirror what actually went out on
@@ -33,6 +43,7 @@ import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse, parse_qs
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -41,12 +52,28 @@ MANIFEST_PATH = os.path.join(EPISODES_DIR, "episodes.json")
 INDEX_PATH = os.path.join(ROOT, "index.html")
 SITEMAP_PATH = os.path.join(ROOT, "sitemap.xml")
 
-# Apple's iTunes Lookup API is the sole source for episodes: full real show-
-# notes text, not capped the way the raw Substack/Apple RSS feed is.
+# Apple's iTunes Lookup API supplies episode metadata (release date, duration,
+# an Apple Podcasts URL for the embed) and is the fallback source for show-
+# notes text. It is NOT used as the primary text source, despite the name of
+# this constant predating that change: it's a separate system from what the
+# Apple Podcasts app itself shows, crawled on its own schedule, and can lag
+# a day or more behind an edit the host makes to an episode's show notes
+# after publishing — confirmed by comparing it against the Apple Podcasts
+# app, which reflected an edit this API still hadn't picked up. See
+# SUBSTACK_RSS_URL below for the actual primary text source.
 APPLE_PODCAST_ID = "1887351307"
 APPLE_LOOKUP_URL = (
     f"https://itunes.apple.com/lookup?id={APPLE_PODCAST_ID}&entity=podcastEpisode&limit=200"
 )
+
+# The show's own RSS feed (hosted by Substack) — the actual canonical source
+# that Apple, Spotify, and every other platform subscribe to. Used as the
+# PRIMARY source for show-notes text (see fetch_substack_descriptions()),
+# since it reflects an edit the moment it's published, with none of the
+# iTunes Lookup API's crawl lag. Apple's API remains the source for
+# everything else (release date, duration, the Apple embed URL), and is
+# still the text fallback for an episode this feed can't be matched to.
+SUBSTACK_RSS_URL = "https://api.substack.com/feed/podcast/8358073.rss"
 
 # "Full Episodes" playlist — drives the static video embed at the top of the
 # homepage (that embed itself isn't touched by this script; it's just used
@@ -94,11 +121,84 @@ CTA_LINE_RE = re.compile(
 def fetch_apple_episodes():
     """Full episode list (title + complete description text) straight from
     Apple's iTunes Lookup API. Returns only the podcastEpisode entries (the
-    first result is the show itself, not an episode)."""
+    first result is the show itself, not an episode). Kept as the source for
+    episode metadata (release date, duration, Apple URL) and as the text
+    fallback when an episode can't be matched in the Substack feed — see
+    fetch_substack_descriptions(), which is the preferred text source."""
     req = urllib.request.Request(APPLE_LOOKUP_URL, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     return [r for r in data.get("results", []) if r.get("wrapperType") == "podcastEpisode"]
+
+
+def html_to_plain_text(desc_html):
+    """Substack's RSS <description> is real (if loosely-authored) HTML —
+    <p> paragraphs, <a href> links, occasional <br>/<li> — not the plain text
+    Apple's API hands back. apple_description_to_html()'s block-classifying
+    heuristics (bullets, pseudo-headings, CTA lines, the footer strip) all
+    expect plain newline-separated lines, so this converts the HTML down to
+    that shape: block-level closing tags become paragraph breaks, remaining
+    tags are dropped (their inner text is kept — a link becomes just its
+    visible text, same lossy trade-off Apple's own plain-text field already
+    makes), and HTML entities are unescaped. This is intentionally generic
+    rather than a full HTML parser, since the actual markup is inconsistent
+    across older/newer episodes."""
+    text = desc_html or ""
+    text = re.sub(r"(?is)</\s*(p|div|h[1-6])\s*>", "\n\n", text)
+    text = re.sub(r"(?is)<\s*br\s*/?\s*>", "\n", text)
+    text = re.sub(r"(?is)<\s*li[^>]*>", "* ", text)
+    text = re.sub(r"(?is)</\s*li\s*>", "\n", text)
+    text = re.sub(r"(?s)<[^>]+>", "", text)
+    text = html.unescape(text)
+    # Rich-text editors like Substack's often leave an "empty" paragraph as a
+    # zero-width space or non-breaking space rather than nothing — without
+    # this it survives stripping/splitting below and renders as a blank <p>.
+    text = text.replace("​", "").replace("﻿", "").replace("\xa0", " ")
+    lines = [ln.strip() for ln in text.split("\n")]
+    return "\n".join(lines).strip()
+
+
+def fetch_substack_descriptions():
+    """Two lookups — (by_title, by_date), both {key: plain_text_description}
+    — straight from the show's own RSS feed: the actual source Apple/
+    Spotify/everyone else subscribes to, and the only one of the two that
+    reflects a host's edit immediately rather than on Apple's own crawl
+    schedule (see the comment on SUBSTACK_RSS_URL). by_date (keyed by
+    YYYY-MM-DD, from each item's pubDate) exists because title isn't
+    actually reliable as the sole match key here: unlike Apple's API, which
+    only ever lags behind an edit, a host can edit an episode's *title* on
+    Substack too — confirmed happening on the same episode used to diagnose
+    this (Apple's Lookup API still showed the old title, but the Apple
+    Podcasts app already showed a different one), and normalized-title
+    matching, still done first, would silently miss this feed's fresher
+    text entirely in that case. Returns ({}, {}) on any fetch/parse failure
+    rather than raising — callers fall back to Apple's API text for every
+    episode in that case, same as before this existed, so a feed hiccup
+    degrades freshness for one run rather than breaking the sync."""
+    try:
+        req = urllib.request.Request(SUBSTACK_RSS_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            root = ET.fromstring(resp.read())
+    except Exception as e:
+        print(f"Could not fetch Substack RSS feed: {e}", file=sys.stderr)
+        return {}, {}
+
+    by_title, by_date = {}, {}
+    for item in root.findall(".//item"):
+        title = (item.findtext("title") or "").strip()
+        desc_html = item.findtext("description") or ""
+        if not title or not desc_html:
+            continue
+        text = html_to_plain_text(desc_html)
+        by_title[normalize_title(title)] = text
+
+        pub_date = (item.findtext("pubDate") or "").strip()
+        if pub_date:
+            try:
+                by_date[parsedate_to_datetime(pub_date).strftime("%Y-%m-%d")] = text
+            except (TypeError, ValueError):
+                pass
+    return by_title, by_date
 
 
 def fetch_playlist_entries(playlist_id, limit=5):
@@ -691,20 +791,24 @@ def update_homepage(latest_ep):
         f.write(html)
 
 
-def refresh_existing_episodes(manifest, apple_episodes):
+def refresh_existing_episodes(manifest, apple_episodes, substack_by_title=None, substack_by_date=None):
     """Already-synced episodes otherwise never get looked at again: an
     episode is matched as "new" (see main()) by title+date, so once it's in
-    the manifest, its content_html is frozen at whatever Apple's description
-    said at sync time. If the host edits an episode's Apple show notes after
-    it's already live on the site — fixing a typo, adding a link, expanding
-    a paragraph — that edit was silently dropped forever, including from the
+    the manifest, its content_html is frozen at whatever text was captured
+    at sync time. If the host edits an episode's show notes after it's
+    already live on the site — fixing a typo, adding a link, expanding a
+    paragraph — that edit was silently dropped forever, including from the
     homepage's "Latest episode" blurb, which is pulled from this same
-    content_html. This re-matches every manifest entry to its current Apple
-    episode data by normalized title (the one field that stays consistent
-    between Apple and the manifest — see the comment in main()) and rewrites
-    content_html/meta_desc whenever Apple's copy has actually changed since.
+    content_html. This re-matches every manifest entry to its current text —
+    by normalized title first, then by iso_date if the title itself was also
+    edited (see fetch_substack_descriptions()) — preferring the Substack
+    feed (immediate — see SUBSTACK_RSS_URL) and falling back to Apple's API
+    (may lag) when an episode isn't found there by either key, then rewrites
+    content_html/meta_desc whenever that text has actually changed since.
     Returns the list of updated episode dicts (each already mutated
     in-place in `manifest`)."""
+    substack_by_title = substack_by_title or {}
+    substack_by_date = substack_by_date or {}
     apple_by_title = {
         normalize_title(ep_data.get("trackName", "")): ep_data
         for ep_data in apple_episodes
@@ -712,14 +816,22 @@ def refresh_existing_episodes(manifest, apple_episodes):
 
     updated = []
     for ep in manifest:
-        ep_data = apple_by_title.get(normalize_title(ep["title"]))
-        if not ep_data:
-            continue
-        new_content_html = apple_description_to_html(ep_data.get("description", ""))
+        key = normalize_title(ep["title"])
+        apple_ep = apple_by_title.get(key)
+        raw_text = substack_by_title.get(key) or substack_by_date.get(ep.get("iso_date"))
+        if raw_text is None:
+            if not apple_ep:
+                continue
+            raw_text = apple_ep.get("description", "")
+
+        new_content_html = apple_description_to_html(raw_text)
         if not new_content_html or new_content_html == ep.get("content_html"):
             continue
         ep["content_html"] = new_content_html
-        ep["meta_desc"] = (ep_data.get("shortDescription") or ep_data.get("description") or ep["title"])[:250]
+        if apple_ep:
+            ep["meta_desc"] = (apple_ep.get("shortDescription") or apple_ep.get("description") or ep["title"])[:250]
+        else:
+            ep["meta_desc"] = (first_paragraph_text(new_content_html) or ep["meta_desc"])[:250]
         ep.pop("body_paragraphs", None)
         updated.append(ep)
     return updated
@@ -747,6 +859,12 @@ def main():
         print(f"Could not fetch Apple episode list: {e}", file=sys.stderr)
         sys.exit(0)  # don't fail the whole workflow over a transient network hiccup
 
+    # Primary text source (see SUBSTACK_RSS_URL) — fetched once here and
+    # threaded through both sync_new_episodes() and refresh_existing_episodes()
+    # below. Both empty on failure, in which case both fall back to Apple's
+    # API text for every episode, same as before this existed.
+    substack_by_title, substack_by_date = fetch_substack_descriptions()
+
     def apple_iso_date(ep_data):
         try:
             return datetime.fromisoformat(
@@ -767,22 +885,22 @@ def main():
         print("No new episodes found on Apple.")
         added = []
     else:
-        added = sync_new_episodes(manifest, known_slugs, new_apple_episodes)
+        added = sync_new_episodes(manifest, known_slugs, new_apple_episodes, substack_by_title, substack_by_date)
 
-    # Pick up edits Apple's host made to already-published show notes (see
+    # Pick up edits the host made to already-published show notes (see
     # refresh_existing_episodes() docstring). This runs against the full
-    # apple_episodes list, independent of whether anything new was added —
-    # an edit to an old episode's notes has nothing to do with whether this
+    # episode lists, independent of whether anything new was added — an
+    # edit to an old episode's notes has nothing to do with whether this
     # week also happened to publish a new one. sync_new_episodes() already
     # wrote out the manifest/index/sitemap when it ran, but not the
     # per-episode page for an already-existing episode, and it doesn't run
     # at all when there's no new episode — so both are handled here.
-    updated_existing = refresh_existing_episodes(manifest, apple_episodes)
+    updated_existing = refresh_existing_episodes(manifest, apple_episodes, substack_by_title, substack_by_date)
     for ep in updated_existing:
         page_html = render_episode_page(ep)
         with open(os.path.join(EPISODES_DIR, f"{ep['slug']}.html"), "w", encoding="utf-8") as f:
             f.write(page_html)
-        print(f"Refreshed episodes/{ep['slug']}.html — Apple show notes changed since last sync.")
+        print(f"Refreshed episodes/{ep['slug']}.html — show notes changed since last sync.")
     if updated_existing:
         with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2, ensure_ascii=False)
@@ -810,10 +928,12 @@ def main():
     # cadence unrelated to when new episodes get published.
     update_topics_grid()
 
-    print(f"Added {len(added)} new episode(s). Refreshed {len(updated_existing)} existing episode(s) with changed Apple show notes.")
+    print(f"Added {len(added)} new episode(s). Refreshed {len(updated_existing)} existing episode(s) with changed show notes.")
 
 
-def sync_new_episodes(manifest, known_slugs, new_apple_episodes):
+def sync_new_episodes(manifest, known_slugs, new_apple_episodes, substack_by_title=None, substack_by_date=None):
+    substack_by_title = substack_by_title or {}
+    substack_by_date = substack_by_date or {}
     added = []
     for ep_data in new_apple_episodes:
         slug = slugify(ep_data["trackName"])
@@ -827,6 +947,19 @@ def sync_new_episodes(manifest, known_slugs, new_apple_episodes):
         date_display, iso_date = format_date(ep_data.get("releaseDate", ""))
         meta_desc = (ep_data.get("shortDescription") or ep_data.get("description") or ep_data["trackName"])[:250]
 
+        # Prefer the Substack feed's text (immediate) over Apple's API copy
+        # (may lag — see SUBSTACK_RSS_URL) even for a brand-new episode: a
+        # host who catches a typo minutes after publishing shouldn't have to
+        # wait on Apple's crawl before the correction shows up on the site.
+        # Title match first, then date (see refresh_existing_episodes()) in
+        # case the title itself was also edited since Apple's API crawl.
+        raw_text = (
+            substack_by_title.get(normalize_title(ep_data["trackName"]))
+            or substack_by_date.get(iso_date)
+        )
+        if raw_text is None:
+            raw_text = ep_data.get("description", "")
+
         ep = {
             "slug": slug,
             "title": ep_data["trackName"],
@@ -837,7 +970,7 @@ def sync_new_episodes(manifest, known_slugs, new_apple_episodes):
             "source": None,
             "spotify_id": None,
             "apple_url": ep_data.get("trackViewUrl"),
-            "content_html": apple_description_to_html(ep_data.get("description", "")),
+            "content_html": apple_description_to_html(raw_text),
         }
         manifest.append(ep)
         added.append(ep)
