@@ -9,16 +9,23 @@ page (and the homepage blurb, if it's the latest one) if the host has
 edited it since the original sync.
 
 Show-notes text, along with everything else (release date, duration, an
-Apple Podcasts URL), comes from Apple's iTunes Lookup API
-(APPLE_LOOKUP_URL) — the sole source. An earlier version of this script
-also tried the show's own Substack RSS feed, since Apple's API is a
-separate system from the Apple Podcasts app itself and can lag a day or
-more behind an edit; that was dropped because Substack blocks GitHub
-Actions' shared runner IPs outright (confirmed: the exact same request
-succeeds instantly from any other network), so the feed fetch just failed
-on every CI run. Trading same-day freshness for a source that actually
-works unattended was judged worth it — see git history on this file if
-that trade-off needs revisiting.
+Apple Podcasts URL), comes primarily from Apple's iTunes Lookup API
+(APPLE_LOOKUP_URL). An earlier version of this script also tried the
+show's own Substack RSS feed, since Apple's API is a separate system from
+the Apple Podcasts app itself and can lag a day or more behind an edit;
+that was dropped because Substack blocks GitHub Actions' shared runner
+IPs outright (confirmed: the exact same request succeeds instantly from
+any other network), so the feed fetch just failed on every CI run.
+
+For the single newest episode only, this script also checks Spotify's Web
+API (fetch_spotify_latest_episode()) and prefers its text over Apple's
+whenever Apple's own text hasn't changed since last sync — catching a
+same-day correction Apple hasn't crawled yet, without paying the cost of
+matching every historical episode against a second source. Spotify has no
+public feed (the anonymous embed-token endpoint some scrapers use is
+itself IP-blocked, same as Substack's was), so this needs a Spotify
+Developer app's client ID/secret (SPOTIFY_CLIENT_ID/SPOTIFY_CLIENT_SECRET)
+and is skipped entirely if they aren't set.
 
 This site intentionally does not embed any video or YouTube content on
 episode pages — those pages exist to mirror what actually went out on
@@ -37,6 +44,8 @@ channel's playlists — see fetch_channel_playlists()). If it's not set, that
 section of the update is skipped for the run (everything else — Apple sync,
 archive, sitemap — still runs normally).
 """
+import base64
+import hashlib
 import html
 import json
 import os
@@ -110,6 +119,12 @@ YT_NS = {
 SPOTIFY_SHOW_URL = "https://open.spotify.com/show/2EoiIdSHex4INCZVOmkU1F"
 APPLE_SHOW_URL = "https://podcasts.apple.com/us/podcast/the-sunday-draft/id1887351307"
 
+# Show ID pulled straight out of SPOTIFY_SHOW_URL above rather than
+# duplicated, so the two constants can't drift apart.
+SPOTIFY_SHOW_ID = SPOTIFY_SHOW_URL.rstrip("/").rsplit("/", 1)[-1]
+SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
+SPOTIFY_EPISODES_URL = f"https://api.spotify.com/v1/shows/{SPOTIFY_SHOW_ID}/episodes"
+
 # A bare "Mozilla/5.0" (no browser/OS/engine details) is a well-known bot
 # signature — several real-world scrapers send exactly that string, so
 # services that bot-filter on User-Agent can and do reject it outright. A
@@ -139,6 +154,95 @@ def fetch_apple_episodes():
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     return [r for r in data.get("results", []) if r.get("wrapperType") == "podcastEpisode"]
+
+
+def apple_iso_date(ep_data):
+    try:
+        return datetime.fromisoformat(
+            ep_data.get("releaseDate", "").replace("Z", "+00:00")
+        ).strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def get_spotify_access_token():
+    """Client Credentials OAuth token (https://accounts.spotify.com/api/token)
+    — the grant meant for reading public catalog data with no user login,
+    same shape as this script's other API-key-gated fetch (see
+    YOUTUBE_API_KEY). Returns None, never raises, when SPOTIFY_CLIENT_ID/
+    SPOTIFY_CLIENT_SECRET aren't set or the request fails, so callers can
+    just skip the Spotify check entirely when it's not configured."""
+    client_id = os.environ.get("SPOTIFY_CLIENT_ID")
+    client_secret = os.environ.get("SPOTIFY_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        return None
+    creds = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+    req = urllib.request.Request(
+        SPOTIFY_TOKEN_URL,
+        data=b"grant_type=client_credentials",
+        headers={"Authorization": f"Basic {creds}", "Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8")).get("access_token")
+    except Exception as e:
+        print(f"Could not get Spotify access token: {e}", file=sys.stderr)
+        return None
+
+
+def fetch_spotify_latest_episode():
+    """(title, raw_html_description, release_date_iso) for the show's most
+    recently released episode on Spotify, via the official Web API — the
+    only source for Spotify's own show-notes text, since Spotify has no
+    public feed (see the module docstring). Returns None on any failure,
+    including missing credentials (see get_spotify_access_token()), so this
+    is purely additive: callers just skip the Spotify check and fall back
+    to Apple-only behavior when it's unavailable."""
+    token = get_spotify_access_token()
+    if not token:
+        return None
+    url = f"{SPOTIFY_EPISODES_URL}?market=US&limit=5"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        print(f"Could not fetch Spotify episodes: {e}", file=sys.stderr)
+        return None
+    items = [ep for ep in data.get("items", []) if ep.get("release_date")]
+    if not items:
+        return None
+    latest = max(items, key=lambda ep: ep["release_date"])
+    raw_html = latest.get("html_description") or latest.get("description") or ""
+    return latest.get("name", ""), raw_html, latest["release_date"]
+
+
+def html_description_to_plain_text(desc_html):
+    """Converts real (if loosely-authored) HTML — <p> paragraphs, <a href>
+    links, occasional <br>/<li> — into the plain newline-separated shape
+    description_to_html()'s block-classifying heuristics (bullets,
+    pseudo-headings, CTA lines, the footer strip) expect, same as Apple's
+    own plain-text field already is. Used for Spotify's html_description
+    field. Intentionally generic rather than a full HTML parser, since the
+    actual markup is inconsistent across episodes."""
+    text = desc_html or ""
+    text = re.sub(r"(?is)</\s*(p|div|h[1-6])\s*>", "\n\n", text)
+    text = re.sub(r"(?is)<\s*br\s*/?\s*>", "\n", text)
+    text = re.sub(r"(?is)<\s*li[^>]*>", "* ", text)
+    text = re.sub(r"(?is)</\s*li\s*>", "\n", text)
+    text = re.sub(r"(?s)<[^>]+>", "", text)
+    text = html.unescape(text)
+    # Rich-text editors often leave an "empty" paragraph as a zero-width
+    # space or non-breaking space rather than nothing — without this it
+    # survives stripping/splitting below and renders as a blank <p>.
+    text = text.replace("​", "").replace("﻿", "").replace("\xa0", " ")
+    lines = [ln.strip() for ln in text.split("\n")]
+    return "\n".join(lines).strip()
+
+
+def _text_hash(text):
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
 def _fetch_playlist_entries_rss(playlist_id, limit=5):
@@ -391,10 +495,11 @@ SUBSTACK_FOOTER_RE = re.compile(
 )
 
 
-def apple_description_to_html(raw_description):
-    """Converts Apple's raw episode description text into the same
-    paragraph/list/heading HTML structure used across the rest of the site,
-    instead of dumping it in as one unbroken blob."""
+def description_to_html(raw_description):
+    """Converts a plain-text episode description (Apple's raw text, or
+    Spotify's HTML already run through html_description_to_plain_text())
+    into the same paragraph/list/heading HTML structure used across the
+    rest of the site, instead of dumping it in as one unbroken blob."""
     text = SUBSTACK_FOOTER_RE.sub("", raw_description or "").strip()
     lines = [l.strip() for l in text.split("\n")]
 
@@ -806,33 +911,99 @@ def refresh_existing_episodes(manifest, apple_episodes):
     paragraph — that edit was silently dropped forever, including from the
     homepage's "Latest episode" blurb, which is pulled from this same
     content_html. This re-matches every manifest entry to its current Apple
-    text by normalized title, then rewrites content_html/meta_desc whenever
-    that text has actually changed since. Returns the list of updated
-    episode dicts (each already mutated in-place in `manifest`)."""
+    text by normalized title first, then by iso_date if the title itself
+    was also edited since the original sync — confirmed happening in
+    practice (the F-16 squadron episode's Apple title changed from "27
+    Years in an F-16 Squadron" to "serving with an elite F-16 Squadron"
+    sometime after it synced), and title-only matching would silently drop
+    that episode from every future refresh, Spotify check included, since
+    it'd never match Apple's list again. Rewrites content_html/meta_desc
+    whenever the matched episode's text has actually changed since.
+
+    For whichever entry is currently the newest episode only, this also
+    checks Spotify (see fetch_spotify_latest_episode()) and prefers its text
+    over Apple's when Apple's hasn't changed — Apple can lag a real edit by
+    a day or more, and Spotify sometimes has already picked it up. This
+    can't just compare "does Spotify's rendered text differ from what's
+    stored," though: Spotify's html_description and Apple's description are
+    differently formatted even when nothing was edited, so that would flip
+    the episode back and forth between the two sources' phrasing on every
+    single run, forever, with a spurious commit each time. Instead each
+    source's *raw* text is hashed and stored (apple_desc_hash/
+    spotify_desc_hash on the episode dict), and a source only "wins" when
+    its own hash has changed since it was last recorded — not merely
+    because it disagrees with the other source's wording.
+
+    Returns (updated, hashes_dirty): updated is the list of episode dicts
+    whose visible content_html actually changed (each already mutated
+    in-place in `manifest`); hashes_dirty is True if apple_desc_hash/
+    spotify_desc_hash moved on any episode even when content_html didn't —
+    which happens on every episode's very first run under this hashing
+    scheme (no baseline recorded yet) and whenever a source's text changes
+    to something that happens to render identically. The caller must persist
+    the manifest whenever hashes_dirty is True, not just when updated is
+    non-empty — otherwise the freshly-computed hashes are only ever held in
+    memory for this one run and never actually establish a baseline,
+    silently defeating the whole point of tracking them."""
     apple_by_title = {
         normalize_title(ep_data.get("trackName", "")): ep_data
         for ep_data in apple_episodes
     }
+    apple_by_date = {}
+    for ep_data in apple_episodes:
+        d = apple_iso_date(ep_data)
+        if d:
+            apple_by_date[d] = ep_data
+
+    latest_ep = max(manifest, key=lambda ep: ep["iso_date"]) if manifest else None
+    spotify_latest = fetch_spotify_latest_episode() if latest_ep is not None else None
 
     updated = []
+    hashes_dirty = False
     for ep in manifest:
         key = normalize_title(ep["title"])
-        apple_ep = apple_by_title.get(key)
+        apple_ep = apple_by_title.get(key) or apple_by_date.get(ep.get("iso_date"))
         if not apple_ep:
             continue
         raw_text = apple_ep.get("description", "")
+        apple_hash = _text_hash(raw_text)
+        apple_changed = apple_hash != ep.get("apple_desc_hash")
 
-        new_content_html = apple_description_to_html(raw_text)
+        spotify_changed = False
+        spotify_raw_html = None
+        sp_hash = None
+        if ep is latest_ep and spotify_latest is not None:
+            sp_title, sp_raw_html, _sp_date = spotify_latest
+            if normalize_title(sp_title) == key:
+                sp_hash = _text_hash(sp_raw_html)
+                spotify_changed = sp_hash != ep.get("spotify_desc_hash")
+                spotify_raw_html = sp_raw_html
+
+        # Always record both sources' current hashes, whether or not either
+        # one ends up winning below — otherwise a source that didn't win
+        # this time would look "changed" again next run purely from a stale
+        # baseline, not an actual edit.
+        if apple_changed:
+            ep["apple_desc_hash"] = apple_hash
+            hashes_dirty = True
+        if sp_hash is not None and sp_hash != ep.get("spotify_desc_hash"):
+            ep["spotify_desc_hash"] = sp_hash
+            hashes_dirty = True
+
+        if apple_changed:
+            new_content_html = description_to_html(raw_text)
+        elif spotify_changed:
+            new_content_html = description_to_html(html_description_to_plain_text(spotify_raw_html))
+        else:
+            continue
+
         if not new_content_html or new_content_html == ep.get("content_html"):
             continue
         ep["content_html"] = new_content_html
-        if apple_ep:
-            ep["meta_desc"] = (apple_ep.get("shortDescription") or apple_ep.get("description") or ep["title"])[:250]
-        else:
-            ep["meta_desc"] = (first_paragraph_text(new_content_html) or ep["meta_desc"])[:250]
+        ep["meta_desc"] = (apple_ep.get("shortDescription") or apple_ep.get("description") or ep["title"])[:250]
         ep.pop("body_paragraphs", None)
         updated.append(ep)
-    return updated
+    return updated, hashes_dirty
 
 
 def main():
@@ -865,14 +1036,6 @@ def main():
         print(f"Could not fetch Apple episode list: {e}", file=sys.stderr)
         apple_episodes = []
 
-    def apple_iso_date(ep_data):
-        try:
-            return datetime.fromisoformat(
-                ep_data.get("releaseDate", "").replace("Z", "+00:00")
-            ).strftime("%Y-%m-%d")
-        except ValueError:
-            return None
-
     new_apple_episodes = [
         ep for ep in apple_episodes
         if apple_iso_date(ep) not in known_dates
@@ -895,16 +1058,20 @@ def main():
     # wrote out the manifest/index/sitemap when it ran, but not the
     # per-episode page for an already-existing episode, and it doesn't run
     # at all when there's no new episode — so both are handled here.
-    updated_existing = refresh_existing_episodes(manifest, apple_episodes)
+    updated_existing, hashes_dirty = refresh_existing_episodes(manifest, apple_episodes)
     for ep in updated_existing:
         page_html = render_episode_page(ep)
         with open(os.path.join(EPISODES_DIR, f"{ep['slug']}.html"), "w", encoding="utf-8") as f:
             f.write(page_html)
         print(f"Refreshed episodes/{ep['slug']}.html — show notes changed since last sync.")
-    if updated_existing:
+    # Written whenever hashes_dirty too, not just on a visible content
+    # change — see refresh_existing_episodes()'s docstring on why skipping
+    # that write would silently break its Apple/Spotify change tracking.
+    if updated_existing or hashes_dirty:
         with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2, ensure_ascii=False)
             f.write("\n")
+    if updated_existing:
         with open(os.path.join(EPISODES_DIR, "index.html"), "w", encoding="utf-8") as f:
             f.write(render_index(list(reversed(manifest))))
 
@@ -956,7 +1123,7 @@ def sync_new_episodes(manifest, known_slugs, new_apple_episodes):
             "source": None,
             "spotify_id": None,
             "apple_url": ep_data.get("trackViewUrl"),
-            "content_html": apple_description_to_html(raw_text),
+            "content_html": description_to_html(raw_text),
         }
         manifest.append(ep)
         added.append(ep)
