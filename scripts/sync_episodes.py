@@ -138,7 +138,7 @@ BROWSER_USER_AGENT = (
 BROWSER_HEADERS = {"User-Agent": BROWSER_USER_AGENT}
 
 CTA_LINE_RE = re.compile(
-    r"^(subscribe|follow|watch on|listen on|find us|referenced|timestamps?|"
+    r"^(subscribe|follow|watch on|listen on|find us|to hear more|referenced|timestamps?|"
     r"\d{1,2}:\d{2}|🎥|🎧|🎬|📖|🔗|▶️|📌|📣|⏱️|🎙️)",
     re.IGNORECASE,
 )
@@ -973,8 +973,13 @@ def refresh_existing_episodes(manifest, apple_episodes):
         spotify_raw_html = None
         sp_hash = None
         if ep is latest_ep and spotify_latest is not None:
-            sp_title, sp_raw_html, _sp_date = spotify_latest
-            if normalize_title(sp_title) == key:
+            _sp_title, sp_raw_html, sp_date = spotify_latest
+            # Matched by release date, not title: the title check used here
+            # originally broke on exactly the same title-drift problem the
+            # Apple match above works around (ep["title"] is never rewritten
+            # when a host edit changes it, so a stale stored title would
+            # permanently fail to match Spotify's current one).
+            if sp_date == ep.get("iso_date"):
                 sp_hash = _text_hash(sp_raw_html)
                 spotify_changed = sp_hash != ep.get("spotify_desc_hash")
                 spotify_raw_html = sp_raw_html
