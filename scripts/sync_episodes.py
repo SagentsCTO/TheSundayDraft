@@ -126,6 +126,14 @@ YT_NS = {
     "yt": "http://www.youtube.com/xml/schemas/2015",
 }
 
+# Substack's RSS <description> used to carry the full show-notes text, but
+# now holds only a short one-line teaser (confirmed by inspecting a live
+# feed item: <description> was a ~100-char teaser while the full post body
+# — several paragraphs — was in <content:encoded> instead). fetch_rss_items()
+# reads content:encoded first and only falls back to description for feed
+# items that lack it, rather than risk truncating every episode's notes.
+CONTENT_NS = {"content": "http://purl.org/rss/1.0/modules/content/"}
+
 # Show-level (not episode-level) follow links, used for the "Follow on X" nudge
 # under embedded players — plays via the embed don't register as a follow on
 # either platform, so this is a one-click way for listeners to actually
@@ -205,16 +213,19 @@ def html_to_plain_text(desc_html):
 
 def fetch_rss_items(url):
     """Raw (title, description_html, pubDate) triples for every <item> in an
-    RSS feed at `url`. Raises on any fetch/parse failure — the caller
-    decides how to handle that (see fetch_substack_descriptions(), which
-    tries multiple feed URLs)."""
+    RSS feed at `url`. description_html is <content:encoded> when present
+    (the full post body — see CONTENT_NS) and only falls back to the plain
+    <description> tag for an item that lacks it, since description is now
+    just a short teaser, not the full show notes. Raises on any
+    fetch/parse failure — the caller decides how to handle that (see
+    fetch_substack_descriptions(), which tries multiple feed URLs)."""
     req = urllib.request.Request(url, headers=SUBSTACK_HEADERS)
     with urllib.request.urlopen(req, timeout=30) as resp:
         root = ET.fromstring(resp.read())
     items = []
     for item in root.findall(".//item"):
         title = (item.findtext("title") or "").strip()
-        desc_html = item.findtext("description") or ""
+        desc_html = item.findtext("content:encoded", namespaces=CONTENT_NS) or item.findtext("description") or ""
         pub_date = (item.findtext("pubDate") or "").strip()
         if title and desc_html:
             items.append((title, desc_html, pub_date))
