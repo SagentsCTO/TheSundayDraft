@@ -3,7 +3,10 @@
 Checks Apple Podcasts for episodes that don't have a show-notes page yet,
 and generates one for each — plus regenerates the episode archive, the
 homepage's "Latest episode" link/blurb, the homepage's "What we cover" topic
-cards (from YouTube playlists), and sitemap.xml.
+cards (from YouTube playlists), and sitemap.xml. Also re-checks every
+already-synced episode against Apple's current description and refreshes
+its show-notes page (and the homepage blurb, if it's the latest one) if the
+host has edited it on Apple since the original sync.
 
 This site intentionally does not embed any video or YouTube content on
 episode pages — those pages exist to mirror what actually went out on
@@ -688,6 +691,40 @@ def update_homepage(latest_ep):
         f.write(html)
 
 
+def refresh_existing_episodes(manifest, apple_episodes):
+    """Already-synced episodes otherwise never get looked at again: an
+    episode is matched as "new" (see main()) by title+date, so once it's in
+    the manifest, its content_html is frozen at whatever Apple's description
+    said at sync time. If the host edits an episode's Apple show notes after
+    it's already live on the site — fixing a typo, adding a link, expanding
+    a paragraph — that edit was silently dropped forever, including from the
+    homepage's "Latest episode" blurb, which is pulled from this same
+    content_html. This re-matches every manifest entry to its current Apple
+    episode data by normalized title (the one field that stays consistent
+    between Apple and the manifest — see the comment in main()) and rewrites
+    content_html/meta_desc whenever Apple's copy has actually changed since.
+    Returns the list of updated episode dicts (each already mutated
+    in-place in `manifest`)."""
+    apple_by_title = {
+        normalize_title(ep_data.get("trackName", "")): ep_data
+        for ep_data in apple_episodes
+    }
+
+    updated = []
+    for ep in manifest:
+        ep_data = apple_by_title.get(normalize_title(ep["title"]))
+        if not ep_data:
+            continue
+        new_content_html = apple_description_to_html(ep_data.get("description", ""))
+        if not new_content_html or new_content_html == ep.get("content_html"):
+            continue
+        ep["content_html"] = new_content_html
+        ep["meta_desc"] = (ep_data.get("shortDescription") or ep_data.get("description") or ep["title"])[:250]
+        ep.pop("body_paragraphs", None)
+        updated.append(ep)
+    return updated
+
+
 def main():
     with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
         manifest = json.load(f)
@@ -732,6 +769,27 @@ def main():
     else:
         added = sync_new_episodes(manifest, known_slugs, new_apple_episodes)
 
+    # Pick up edits Apple's host made to already-published show notes (see
+    # refresh_existing_episodes() docstring). This runs against the full
+    # apple_episodes list, independent of whether anything new was added —
+    # an edit to an old episode's notes has nothing to do with whether this
+    # week also happened to publish a new one. sync_new_episodes() already
+    # wrote out the manifest/index/sitemap when it ran, but not the
+    # per-episode page for an already-existing episode, and it doesn't run
+    # at all when there's no new episode — so both are handled here.
+    updated_existing = refresh_existing_episodes(manifest, apple_episodes)
+    for ep in updated_existing:
+        page_html = render_episode_page(ep)
+        with open(os.path.join(EPISODES_DIR, f"{ep['slug']}.html"), "w", encoding="utf-8") as f:
+            f.write(page_html)
+        print(f"Refreshed episodes/{ep['slug']}.html — Apple show notes changed since last sync.")
+    if updated_existing:
+        with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        with open(os.path.join(EPISODES_DIR, "index.html"), "w", encoding="utf-8") as f:
+            f.write(render_index(list(reversed(manifest))))
+
     # The homepage "Latest episode" blurb/link is regenerated from whatever
     # the manifest's newest episode is on EVERY run, not just runs that add
     # a new one. It used to only be refreshed inside sync_new_episodes(),
@@ -752,7 +810,7 @@ def main():
     # cadence unrelated to when new episodes get published.
     update_topics_grid()
 
-    print(f"Added {len(added)} new episode(s).")
+    print(f"Added {len(added)} new episode(s). Refreshed {len(updated_existing)} existing episode(s) with changed Apple show notes.")
 
 
 def sync_new_episodes(manifest, known_slugs, new_apple_episodes):
