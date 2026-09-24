@@ -34,7 +34,7 @@
 
   .booker {
     max-width: 640px;
-    margin: 40px auto 32px;
+    margin: 40px auto 80px;
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--paper);
@@ -93,6 +93,7 @@
   }
 
   .cal-day {
+    position: relative;
     aspect-ratio: 1;
     display: flex;
     align-items: center;
@@ -112,6 +113,8 @@
     cursor: default;
   }
 
+  .cal-day.has-booked { opacity: 1; } /* keep booked-but-full days legible, not faded */
+
   .cal-day.has-slots {
     border-color: var(--border);
     font-weight: 600;
@@ -126,6 +129,107 @@
   }
 
   .cal-day.empty { visibility: hidden; }
+
+  /* Small dot marking a day with one or more existing bookings. Shown
+     regardless of whether the day still has open slots, so a fully-booked
+     day is still explained rather than just looking randomly disabled. */
+  .booked-dot {
+    position: absolute;
+    bottom: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  .cal-day.selected .booked-dot { background: var(--accent-ink); }
+
+  /* Tooltip showing the specific booked times for a day, on hover/focus.
+     Pure CSS so it works with no extra JS beyond setting data-tooltip. */
+  .cal-day[data-tooltip] {
+    /* nothing visual by default — tooltip only appears on hover/focus */
+  }
+
+  .cal-day[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%) translateY(4px);
+    background: var(--ink);
+    color: var(--paper);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.4;
+    white-space: nowrap;
+    padding: 6px 10px;
+    border-radius: 5px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+    z-index: 5;
+  }
+
+  .cal-day[data-tooltip]::before {
+    content: "";
+    position: absolute;
+    bottom: calc(100% + 3px);
+    left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: var(--ink);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s ease;
+    z-index: 5;
+  }
+
+  .cal-day[data-tooltip]:hover::after,
+  .cal-day[data-tooltip]:focus-visible::after {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  .cal-day[data-tooltip]:hover::before,
+  .cal-day[data-tooltip]:focus-visible::before {
+    opacity: 1;
+  }
+
+  .cal-legend {
+    display: flex;
+    justify-content: center;
+    gap: 22px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+
+  .cal-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .legend-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
 
   .cal-status {
     text-align: center;
@@ -228,47 +332,6 @@
 
   .book-confirmed p { color: var(--muted); }
 
-  /* Upcoming bookings (public — times only, no attendee info) */
-  .upcoming {
-    max-width: 640px;
-    margin: 0 auto 80px;
-  }
-
-  .upcoming h3 {
-    font-size: 16px;
-    text-align: center;
-    margin-bottom: 4px;
-  }
-
-  .upcoming-sub {
-    text-align: center;
-    color: var(--muted);
-    font-size: 13px;
-    margin: 0 0 18px;
-  }
-
-  .upcoming-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .upcoming-item {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 10px 16px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    font-size: 14px;
-    background: var(--paper);
-  }
-
-  .upcoming-item .u-date { font-weight: 600; }
-
-  .upcoming-item .u-time { color: var(--muted); }
-
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -308,6 +371,10 @@
         <div class="cal-grid" id="cal-weekdays"></div>
         <div class="cal-grid" id="cal-days"></div>
         <p class="cal-status" id="cal-status">Loading available days&hellip;</p>
+        <div class="cal-legend">
+          <span class="cal-legend-item"><span class="legend-swatch"></span> Available</span>
+          <span class="cal-legend-item"><span class="legend-dot"></span> Already booked (hover for times)</span>
+        </div>
       </div>
 
       <!-- Step 2: pick a time -->
@@ -346,14 +413,6 @@
 
     </div>
   </div>
-
-  <div class="wrap">
-    <div class="upcoming" id="upcoming-section" hidden>
-      <h3>Upcoming conversations</h3>
-      <p class="upcoming-sub">Times already booked — pick a different slot above.</p>
-      <div class="upcoming-list" id="upcoming-list"></div>
-    </div>
-  </div>
 </main>
 
 <footer class="site-footer">
@@ -383,6 +442,7 @@
   today.setHours(0, 0, 0, 0);
   let viewMonth = new Date(today.getFullYear(), today.getMonth(), 1);
   let slotsByDate = {};
+  let bookedByDate = {}; // populated once from /api/upcoming-bookings, independent of viewMonth
   let selectedDateKey = null;
   let selectedStart = null;
 
@@ -403,8 +463,6 @@
     error: document.getElementById("book-error"),
     confirmedPanel: document.getElementById("confirmed-panel"),
     confirmedDetail: document.getElementById("confirmed-detail"),
-    upcomingSection: document.getElementById("upcoming-section"),
-    upcomingList: document.getElementById("upcoming-list"),
   };
 
   function dateKey(d) {
@@ -449,31 +507,23 @@
     renderDays();
   }
 
-  async function loadUpcoming() {
+  async function loadBookedMarkers() {
     try {
       const res = await fetch(`${WORKER_BASE_URL}/api/upcoming-bookings`);
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || "Could not load upcoming bookings");
 
-      const booked = Array.isArray(data.booked) ? data.booked : [];
-      if (booked.length === 0) {
-        el.upcomingSection.hidden = true;
-        return;
-      }
-
-      el.upcomingList.innerHTML = booked
-        .map((b) => {
-          const d = new Date(b.start);
-          const dateStr = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-          const timeStr = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-          return `<div class="upcoming-item"><span class="u-date">${dateStr}</span><span class="u-time">${timeStr}</span></div>`;
-        })
-        .join("");
-      el.upcomingSection.hidden = false;
+      const grouped = {};
+      (Array.isArray(data.booked) ? data.booked : []).forEach((b) => {
+        const key = dateKey(new Date(b.start));
+        (grouped[key] = grouped[key] || []).push(b.start);
+      });
+      bookedByDate = grouped;
     } catch (e) {
-      // Non-critical — just don't show the section if it fails.
-      el.upcomingSection.hidden = true;
+      // Non-critical — the calendar still works fine without the markers.
+      bookedByDate = {};
     }
+    renderDays();
   }
 
   function renderDays() {
@@ -496,10 +546,23 @@
       const isPast = d < today;
       const hasSlots = !isPast && Array.isArray(slotsByDate[key]) && slotsByDate[key].length > 0;
       const isSelected = key === selectedDateKey;
+      const bookedTimes = bookedByDate[key];
+      const hasBooked = !isPast && Array.isArray(bookedTimes) && bookedTimes.length > 0;
+
       const classes = ["cal-day"];
       if (hasSlots) classes.push("has-slots");
+      if (hasBooked) classes.push("has-booked");
       if (isSelected) classes.push("selected");
-      html += `<button type="button" class="${classes.join(" ")}" data-date="${key}" ${hasSlots ? "" : "disabled"}>${day}</button>`;
+
+      let tooltipAttr = "";
+      if (hasBooked) {
+        const times = bookedTimes
+          .map((iso) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))
+          .join(", ");
+        tooltipAttr = ` data-tooltip="Booked: ${times}" tabindex="0"`;
+      }
+
+      html += `<button type="button" class="${classes.join(" ")}" data-date="${key}"${tooltipAttr} ${hasSlots ? "" : "disabled"}>${day}${hasBooked ? '<span class="booked-dot"></span>' : ""}</button>`;
     }
     el.days.innerHTML = html;
 
@@ -589,8 +652,8 @@
       el.confirmedPanel.hidden = false;
       el.confirmedPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 
-      // A new booking exists now — refresh the public "already taken" list.
-      loadUpcoming();
+      // A new booking exists now — refresh the on-calendar markers.
+      loadBookedMarkers();
     } catch (err) {
       el.error.textContent = err.message + " — pick another time and try again.";
       el.error.hidden = false;
@@ -621,7 +684,7 @@
   renderWeekdayHeader();
   renderDays();
   loadMonth();
-  loadUpcoming();
+  loadBookedMarkers();
 })();
 </script>
 </body>

@@ -49,6 +49,7 @@ import hashlib
 import html
 import json
 import os
+import random
 import re
 import sys
 import urllib.request
@@ -101,6 +102,11 @@ AUDIO_RSS_PLAYLIST_ID = "PLVmSsoYIlm7fbnYQh4ZGK8M-l3KNtk1iX"
 # "topics" (add other playlist IDs here too, e.g. Shorts/Livestreams, if the
 # channel ever gets a playlist that shouldn't be treated as a topic).
 EXCLUDED_TOPIC_PLAYLIST_IDS = {FULL_EPISODES_PLAYLIST_ID, AUDIO_RSS_PLAYLIST_ID}
+
+# How many of each playlist's top-viewed videos to rotate a card's pick
+# from — see build_topics_grid_html(). 3 keeps every pick a proven
+# performer while still giving the grid some variety run over run.
+TOPIC_ROTATION_POOL_SIZE = 3
 
 # Handle used to resolve the channel ID via the Data API (channels.list
 # ?forHandle=...). Matches the @handle already used in the site's YouTube
@@ -337,6 +343,89 @@ def fetch_playlist_entries(playlist_id, limit=5):
     return entries
 
 
+def fetch_playlist_video_ids_api(playlist_id, api_key, cap=200):
+    """Every {video_id, title} in a playlist (paginated through
+    playlistItems.list), up to `cap` items total. Unlike
+    _fetch_playlist_entries_api, this doesn't stop at the newest few — it's
+    used when every video in the playlist needs to be considered, not just
+    the most recent ones (see fetch_playlist_entries_by_views()). `cap`
+    bounds quota/runtime on an unexpectedly huge playlist; none of this
+    channel's topic playlists are anywhere near it. Skips deleted/private
+    placeholder entries. Returns [] on any failure."""
+    entries = []
+    page_token = ""
+    try:
+        while len(entries) < cap:
+            url = (
+                "https://www.googleapis.com/youtube/v3/playlistItems"
+                f"?part=snippet,contentDetails&playlistId={playlist_id}&maxResults=50&key={api_key}"
+                + (f"&pageToken={page_token}" if page_token else "")
+            )
+            req = urllib.request.Request(url, headers=BROWSER_HEADERS)
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            for item in data.get("items", []):
+                snippet = item.get("snippet", {})
+                content_details = item.get("contentDetails", {})
+                video_id = content_details.get("videoId") or snippet.get("resourceId", {}).get("videoId", "")
+                title = (snippet.get("title") or "").strip()
+                if not video_id or not title or title in ("Deleted video", "Private video"):
+                    continue
+                entries.append({"video_id": video_id, "title": title})
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+    except Exception as e:
+        print(f"Could not list videos in playlist {playlist_id}: {e}", file=sys.stderr)
+        return []
+    return entries[:cap]
+
+
+def fetch_video_view_counts(video_ids, api_key):
+    """{video_id: view_count} for a list of video IDs, via videos.list
+    (batched 50 at a time — the API's max per call). A batch that fails is
+    simply missing from the result rather than raising, since one bad
+    batch shouldn't take down the whole ranking; a video with no view-count
+    data just won't be able to win the "most viewed" comparison."""
+    counts = {}
+    for i in range(0, len(video_ids), 50):
+        batch = video_ids[i : i + 50]
+        url = (
+            "https://www.googleapis.com/youtube/v3/videos"
+            f"?part=statistics&id={','.join(batch)}&key={api_key}"
+        )
+        try:
+            req = urllib.request.Request(url, headers=BROWSER_HEADERS)
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            print(f"Could not fetch view counts for a batch of videos: {e}", file=sys.stderr)
+            continue
+        for item in data.get("items", []):
+            vid = item.get("id")
+            try:
+                counts[vid] = int(item.get("statistics", {}).get("viewCount", 0))
+            except (TypeError, ValueError):
+                counts[vid] = 0
+    return counts
+
+
+def fetch_playlist_entries_by_views(playlist_id, api_key, limit=5):
+    """Most-viewed-first list of {video_id, title, views} across every
+    video in a playlist — used to build each topic's rotation pool of
+    proven, popular videos on the homepage instead of just its newest (see
+    build_topics_grid_html()). Returns [] if the playlist can't be listed
+    at all."""
+    entries = fetch_playlist_video_ids_api(playlist_id, api_key)
+    if not entries:
+        return []
+    views = fetch_video_view_counts([e["video_id"] for e in entries], api_key)
+    for e in entries:
+        e["views"] = views.get(e["video_id"], 0)
+    entries.sort(key=lambda e: e["views"], reverse=True)
+    return entries[:limit]
+
+
 TOPIC_CARD_TMPL = """        <a class="topic-card" href="https://www.youtube.com/watch?v={video_id}" target="_blank" rel="noopener">
           <img class="topic-thumb" src="https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" alt="" loading="lazy">
           <span class="topic-label">{label}</span>
@@ -413,12 +502,15 @@ def fetch_channel_playlists(api_key):
 
 def build_topics_grid_html():
     """One card per playlist discovered on the channel (via the YouTube
-    Data API), showing each playlist's newest video — unless that video is
-    the same one currently featured as the homepage's 'Latest episode' (the
-    newest video in FULL_EPISODES_PLAYLIST_ID), in which case that topic
-    falls back to its second-newest video instead, so the homepage doesn't
-    show the same video twice. If a topic playlist has only one video, it's
-    shown regardless (duplicate allowed rather than an empty card).
+    Data API). Each card's video is picked at RANDOM from that playlist's
+    top TOPIC_ROTATION_POOL_SIZE most-viewed videos (all-time) — so every
+    pick is still a proven, popular video, but re-running this script can
+    surface a different one each time instead of freezing forever on
+    whichever video happened to hit #1 first. The homepage's 'Latest
+    episode' video (the newest video in FULL_EPISODES_PLAYLIST_ID) is
+    excluded from the pool when possible, so the homepage doesn't show the
+    same video twice; if that's the only video available for a topic, it's
+    shown anyway (duplicate allowed rather than an empty card).
 
     Returns None (not a partial result) if the API key is missing, the
     channel/playlist list can't be fetched, or ANY individual playlist
@@ -447,13 +539,16 @@ def build_topics_grid_html():
 
     cards = []
     for pl in topic_playlists:
-        entries = fetch_playlist_entries(pl["id"], limit=2)
+        entries = fetch_playlist_entries_by_views(
+            pl["id"], api_key, limit=TOPIC_ROTATION_POOL_SIZE
+        )
         if not entries:
             print(f"Playlist '{pl['title']}' unreachable/empty — aborting topics-grid update.", file=sys.stderr)
             return None
-        chosen = entries[0]
-        if chosen["video_id"] == latest_video_id and len(entries) > 1:
-            chosen = entries[1]
+        pool = [e for e in entries if e["video_id"] != latest_video_id]
+        if not pool:
+            pool = entries
+        chosen = random.choice(pool)
         cards.append(
             TOPIC_CARD_TMPL.format(
                 video_id=chosen["video_id"],
