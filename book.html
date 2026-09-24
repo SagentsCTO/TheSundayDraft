@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Book a Conversation — The Sunday Draft</title>
+<meta name="description" content="Grab time on the calendar to talk with The Sunday Draft — guest pitches, story ideas, or just to say hello.">
+<link rel="canonical" href="https://thesundaydraft.com/book.html">
+<meta name="robots" content="noindex">
+
+<link rel="icon" href="assets/favicon.png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css?v=11">
+<style>
+  /* Booking-page-only styles. Reuses the color/type tokens from styles.css
+     (--ink, --accent, --paper, --border, etc.) so this page matches the
+     rest of the site without touching the shared stylesheet. */
+
+  .book-hero {
+    padding: 64px 0 8px;
+    text-align: center;
+  }
+
+  .book-hero h1 { font-size: clamp(30px, 5vw, 44px); }
+
+  .book-hero p {
+    max-width: 560px;
+    margin: 14px auto 0;
+    color: var(--muted);
+  }
+
+  .booker {
+    max-width: 640px;
+    margin: 40px auto 80px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--paper);
+    overflow: hidden;
+  }
+
+  .booker-panel { padding: 28px; }
+
+  .booker-panel + .booker-panel { border-top: 1px solid var(--border); }
+
+  /* Calendar */
+  .cal-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+
+  .cal-nav-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    width: 34px;
+    height: 34px;
+    font-size: 16px;
+    cursor: pointer;
+    color: var(--ink);
+  }
+
+  .cal-nav-btn:hover:not(:disabled) { background: var(--paper-alt); }
+
+  .cal-nav-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+
+  .cal-month-label {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: 17px;
+  }
+
+  .cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+    text-align: center;
+  }
+
+  .cal-weekday {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    padding-bottom: 6px;
+  }
+
+  .cal-day {
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: none;
+    font-size: 14px;
+    font-family: var(--sans);
+    color: var(--ink);
+    cursor: pointer;
+  }
+
+  .cal-day:disabled {
+    color: var(--muted);
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .cal-day.has-slots {
+    border-color: var(--border);
+    font-weight: 600;
+  }
+
+  .cal-day.has-slots:hover { background: var(--paper-alt); }
+
+  .cal-day.selected {
+    background: var(--accent);
+    color: var(--accent-ink);
+    border-color: var(--accent);
+  }
+
+  .cal-day.empty { visibility: hidden; }
+
+  .cal-status {
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+    padding: 12px 0 0;
+  }
+
+  /* Time slots */
+  .slots-heading {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: 16px;
+    margin: 0 0 14px;
+  }
+
+  .slots-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 10px;
+  }
+
+  .slot-btn {
+    padding: 10px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--paper);
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    color: var(--ink);
+  }
+
+  .slot-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .slot-btn.selected {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+  }
+
+  /* Booking form */
+  .book-field { margin-bottom: 16px; }
+
+  .book-field label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  .book-field input,
+  .book-field textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: var(--sans);
+    font-size: 14px;
+    background: #fff;
+    color: var(--ink);
+  }
+
+  .book-field textarea { resize: vertical; min-height: 70px; }
+
+  .book-summary {
+    font-size: 14px;
+    color: var(--muted);
+    margin-bottom: 18px;
+  }
+
+  .book-summary strong { color: var(--ink); }
+
+  .book-submit {
+    width: 100%;
+    padding: 13px 26px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 14px;
+    border: none;
+    background: var(--accent);
+    color: var(--accent-ink);
+    cursor: pointer;
+  }
+
+  .book-submit:hover:not(:disabled) { opacity: 0.9; }
+
+  .book-submit:disabled { opacity: 0.6; cursor: default; }
+
+  .book-error {
+    color: #a33;
+    font-size: 14px;
+    margin-top: 12px;
+  }
+
+  .book-confirmed { text-align: center; padding: 8px 0; }
+
+  .book-confirmed h2 { font-size: 24px; margin-bottom: 8px; }
+
+  .book-confirmed p { color: var(--muted); }
+
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a href="index.html" class="logo"><img src="assets/logo-wordmark.png" alt="The Sunday Draft" class="logo-img"></a>
+    <nav class="nav">
+      <a href="index.html#episodes">Latest</a>
+      <a href="episodes/index.html">Episodes</a>
+      <a href="index.html#topics">Topics</a>
+      <a href="index.html#listen">Listen</a>
+      <a href="index.html#about">About</a>
+      <a href="book.html">Book a chat</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="book-hero wrap">
+    <p class="eyebrow">Talk to the show</p>
+    <h1>Book a conversation</h1>
+    <p>Have a story, a guest idea, or just want to say hello? Grab a slot below — it goes straight onto the calendar.</p>
+  </section>
+
+  <div class="wrap">
+    <div class="booker">
+
+      <!-- Step 1: pick a date -->
+      <div class="booker-panel" id="calendar-panel">
+        <div class="cal-nav">
+          <button class="cal-nav-btn" id="cal-prev" type="button" aria-label="Previous month">&larr;</button>
+          <span class="cal-month-label" id="cal-month-label"></span>
+          <button class="cal-nav-btn" id="cal-next" type="button" aria-label="Next month">&rarr;</button>
+        </div>
+        <div class="cal-grid" id="cal-weekdays"></div>
+        <div class="cal-grid" id="cal-days"></div>
+        <p class="cal-status" id="cal-status">Loading available days&hellip;</p>
+      </div>
+
+      <!-- Step 2: pick a time -->
+      <div class="booker-panel" id="slots-panel" hidden>
+        <h3 class="slots-heading" id="slots-heading"></h3>
+        <div class="slots-grid" id="slots-grid"></div>
+      </div>
+
+      <!-- Step 3: details + confirm -->
+      <div class="booker-panel" id="form-panel" hidden>
+        <p class="book-summary" id="book-summary"></p>
+        <form id="book-form">
+          <div class="book-field">
+            <label for="book-name">Name</label>
+            <input type="text" id="book-name" name="name" required autocomplete="name">
+          </div>
+          <div class="book-field">
+            <label for="book-email">Email</label>
+            <input type="email" id="book-email" name="email" required autocomplete="email">
+          </div>
+          <div class="book-field">
+            <label for="book-notes">What would you like to talk about? (optional)</label>
+            <textarea id="book-notes" name="notes"></textarea>
+          </div>
+          <button type="submit" class="book-submit" id="book-submit">Confirm booking</button>
+          <p class="book-error" id="book-error" hidden></p>
+        </form>
+      </div>
+
+      <!-- Step 4: confirmation -->
+      <div class="booker-panel book-confirmed" id="confirmed-panel" hidden>
+        <h2>You're booked.</h2>
+        <p id="confirmed-detail"></p>
+        <p>A confirmation email is on its way from Cal.com.</p>
+      </div>
+
+    </div>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-inner">
+    <p>&copy; <span id="year"></span> The Sunday Draft.</p>
+    <div class="social-links">
+      <a href="https://www.youtube.com/@TheSundayDraft" target="_blank" rel="noopener">YouTube</a>
+      <a href="https://bsky.app/profile/thesundaydraft.bsky.social" target="_blank" rel="noopener">BlueSky</a>
+      <a href="https://thesundaydraft.substack.com" target="_blank" rel="noopener">Substack</a>
+    </div>
+  </div>
+</footer>
+
+<script src="script.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  // Cloudflare Worker deployed via cal-worker/ — see cal-worker/README.md.
+  const WORKER_BASE_URL = "https://sundaydraft-cal-proxy.raj-a61.workers.dev";
+
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const MAX_MONTHS_AHEAD = 3;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  let viewMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  let slotsByDate = {};
+  let selectedDateKey = null;
+  let selectedStart = null;
+
+  const el = {
+    monthLabel: document.getElementById("cal-month-label"),
+    weekdays: document.getElementById("cal-weekdays"),
+    days: document.getElementById("cal-days"),
+    status: document.getElementById("cal-status"),
+    prev: document.getElementById("cal-prev"),
+    next: document.getElementById("cal-next"),
+    slotsPanel: document.getElementById("slots-panel"),
+    slotsHeading: document.getElementById("slots-heading"),
+    slotsGrid: document.getElementById("slots-grid"),
+    formPanel: document.getElementById("form-panel"),
+    summary: document.getElementById("book-summary"),
+    form: document.getElementById("book-form"),
+    submit: document.getElementById("book-submit"),
+    error: document.getElementById("book-error"),
+    confirmedPanel: document.getElementById("confirmed-panel"),
+    confirmedDetail: document.getElementById("confirmed-detail"),
+  };
+
+  function dateKey(d) {
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+
+  function fmtMonth(d) {
+    return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  }
+
+  function renderWeekdayHeader() {
+    el.weekdays.innerHTML = WEEKDAYS.map((w) => `<div class="cal-weekday">${w}</div>`).join("");
+  }
+
+  async function loadMonth() {
+    el.status.textContent = "Loading available days…";
+    el.status.hidden = false;
+    slotsByDate = {};
+    renderDays();
+
+    const monthStart = viewMonth < today ? today : viewMonth;
+    const monthEnd = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 0);
+
+    const params = new URLSearchParams({
+      start: dateKey(monthStart),
+      end: dateKey(monthEnd),
+      timeZone,
+    });
+
+    try {
+      const res = await fetch(`${WORKER_BASE_URL}/api/availability?${params.toString()}`);
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "Could not load availability");
+      slotsByDate = data.slots || {};
+      const hasAny = Object.values(slotsByDate).some((arr) => arr.length > 0);
+      el.status.hidden = hasAny;
+      el.status.textContent = hasAny ? "" : "No open times this month.";
+    } catch (e) {
+      el.status.hidden = false;
+      el.status.textContent = "Couldn't load availability right now — please try again shortly.";
+    }
+    renderDays();
+  }
+
+  function renderDays() {
+    el.monthLabel.textContent = fmtMonth(viewMonth);
+    el.prev.disabled = viewMonth.getFullYear() === today.getFullYear() && viewMonth.getMonth() === today.getMonth();
+
+    const maxMonth = new Date(today.getFullYear(), today.getMonth() + MAX_MONTHS_AHEAD, 1);
+    el.next.disabled = viewMonth >= maxMonth;
+
+    const firstWeekday = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1).getDay();
+    const daysInMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 0).getDate();
+
+    let html = "";
+    for (let i = 0; i < firstWeekday; i++) {
+      html += `<div class="cal-day empty"></div>`;
+    }
+    for (let day = 1; day <= daysInMonth; day++) {
+      const d = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), day);
+      const key = dateKey(d);
+      const isPast = d < today;
+      const hasSlots = !isPast && Array.isArray(slotsByDate[key]) && slotsByDate[key].length > 0;
+      const isSelected = key === selectedDateKey;
+      const classes = ["cal-day"];
+      if (hasSlots) classes.push("has-slots");
+      if (isSelected) classes.push("selected");
+      html += `<button type="button" class="${classes.join(" ")}" data-date="${key}" ${hasSlots ? "" : "disabled"}>${day}</button>`;
+    }
+    el.days.innerHTML = html;
+
+    el.days.querySelectorAll(".cal-day.has-slots").forEach((btn) => {
+      btn.addEventListener("click", () => selectDate(btn.dataset.date));
+    });
+  }
+
+  function selectDate(key) {
+    selectedDateKey = key;
+    selectedStart = null;
+    renderDays();
+
+    const times = slotsByDate[key] || [];
+    el.slotsHeading.textContent = new Date(key + "T00:00:00").toLocaleDateString(undefined, {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    });
+    el.slotsGrid.innerHTML = times
+      .map(
+        (iso) =>
+          `<button type="button" class="slot-btn" data-start="${iso}">${new Date(iso).toLocaleTimeString([], {
+            hour: "numeric",
+            minute: "2-digit",
+          })}</button>`
+      )
+      .join("");
+    el.slotsGrid.querySelectorAll(".slot-btn").forEach((btn) => {
+      btn.addEventListener("click", () => selectSlot(btn.dataset.start));
+    });
+
+    el.slotsPanel.hidden = false;
+    el.formPanel.hidden = true;
+    el.confirmedPanel.hidden = true;
+    el.slotsPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function selectSlot(iso) {
+    selectedStart = iso;
+    el.slotsGrid.querySelectorAll(".slot-btn").forEach((btn) => {
+      btn.classList.toggle("selected", btn.dataset.start === iso);
+    });
+
+    const d = new Date(iso);
+    el.summary.innerHTML = `You're booking <strong>${d.toLocaleDateString(undefined, {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    })} at ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</strong> (${timeZone}).`;
+
+    el.formPanel.hidden = false;
+    el.error.hidden = true;
+    el.formPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  el.form.addEventListener("submit", async function (e) {
+    e.preventDefault();
+    if (!selectedStart) return;
+
+    el.error.hidden = true;
+    el.submit.disabled = true;
+    el.submit.textContent = "Booking…";
+
+    const name = document.getElementById("book-name").value;
+    const email = document.getElementById("book-email").value;
+    const notes = document.getElementById("book-notes").value;
+
+    try {
+      const res = await fetch(`${WORKER_BASE_URL}/api/book`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start: selectedStart, name, email, notes, timeZone }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "Could not complete the booking");
+
+      const d = new Date(data.booking.start || selectedStart);
+      el.confirmedDetail.textContent =
+        d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }) +
+        " at " +
+        d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+      el.slotsPanel.hidden = true;
+      el.formPanel.hidden = true;
+      document.getElementById("calendar-panel").hidden = true;
+      el.confirmedPanel.hidden = false;
+      el.confirmedPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } catch (err) {
+      el.error.textContent = err.message + " — pick another time and try again.";
+      el.error.hidden = false;
+      // The slot may have just been taken by someone else — refresh availability.
+      loadMonth();
+    } finally {
+      el.submit.disabled = false;
+      el.submit.textContent = "Confirm booking";
+    }
+  });
+
+  el.prev.addEventListener("click", function () {
+    viewMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth() - 1, 1);
+    selectedDateKey = null;
+    el.slotsPanel.hidden = true;
+    el.formPanel.hidden = true;
+    loadMonth();
+  });
+
+  el.next.addEventListener("click", function () {
+    viewMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 1);
+    selectedDateKey = null;
+    el.slotsPanel.hidden = true;
+    el.formPanel.hidden = true;
+    loadMonth();
+  });
+
+  renderWeekdayHeader();
+  renderDays();
+  loadMonth();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+name = "sundaydraft-cal-proxy"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+
+# Non-secret configuration — safe to commit. This identifies WHICH Cal.com
+# event people are booking; it does not grant access to anything by itself.
+#
+# From https://cal.com/the-sunday-draft/record
+[vars]
+CAL_USERNAME = "the-sunday-draft"
+CAL_EVENT_SLUG = "record"
+
+# The actual secret (your Cal.com API key) is NOT set here — never put a
+# secret in this file, since it's meant to be safe to commit alongside the
+# rest of the site. Instead, after installing wrangler, run:
+#
+#   npx wrangler secret put CAL_API_KEY
+#
+# and paste the key when prompted. Wrangler stores it encrypted on
+# Cloudflare's side; it never touches this file or git.
