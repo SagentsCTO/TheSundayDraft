@@ -19,12 +19,22 @@
  *     -> proxies Cal.com POST /v2/bookings, returns
  *        { ok: true, booking: { start, end, ... } } or { ok: false, error }
  *
+ *   GET  /api/upcoming-bookings
+ *     -> proxies Cal.com GET /v2/bookings (this is the ONLY route that
+ *        touches an endpoint returning attendee names/emails/notes), then
+ *        strips every field down to just { start, end } before it leaves
+ *        this Worker. This is a deliberate, public-facing endpoint (it
+ *        shows which times are already taken) — it must NEVER pass through
+ *        attendee info. See handleUpcomingBookings() for the allowlist.
+ *        Returns { ok: true, booked: [{ start, end }, ...] }
+ *
  * Everything else -> 404.
  */
 
 const CAL_API_BASE = "https://api.cal.com";
 const SLOTS_API_VERSION = "2024-09-04";
 const BOOKINGS_API_VERSION = "2026-02-25";
+const LIST_BOOKINGS_API_VERSION = "2026-05-01";
 
 // Only these origins are allowed to call this Worker from a browser. Add
 // a staging/preview origin here too if you ever need one.
@@ -35,6 +45,7 @@ const ALLOWED_ORIGINS = new Set([
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_UPCOMING = 20;
 
 function corsHeaders(request) {
   const origin = request.headers.get("Origin");
@@ -73,6 +84,10 @@ export default {
 
     if (url.pathname === "/api/book" && request.method === "POST") {
       return handleBook(request, env);
+    }
+
+    if (url.pathname === "/api/upcoming-bookings" && request.method === "GET") {
+      return handleUpcomingBookings(request, env);
     }
 
     return json({ ok: false, error: "Not found" }, 404, request);
@@ -207,6 +222,54 @@ async function handleBook(request, env) {
     201,
     request
   );
+}
+
+async function handleUpcomingBookings(request, env) {
+  const calUrl = new URL(`${CAL_API_BASE}/v2/bookings`);
+  calUrl.searchParams.set("status", "upcoming");
+  calUrl.searchParams.set("sortStart", "asc");
+  calUrl.searchParams.set("limit", "100");
+
+  let calResp;
+  try {
+    calResp = await fetch(calUrl.toString(), {
+      headers: {
+        Authorization: `Bearer ${env.CAL_API_KEY}`,
+        "cal-api-version": LIST_BOOKINGS_API_VERSION,
+      },
+    });
+  } catch (e) {
+    return json({ ok: false, error: "Could not reach Cal.com" }, 502, request);
+  }
+
+  const body = await calResp.json().catch(() => null);
+  if (!calResp.ok || !body || body.status !== "success") {
+    return json(
+      { ok: false, error: extractCalError(body) || "Cal.com returned an error" },
+      calResp.status || 502,
+      request
+    );
+  }
+
+  // This is the one Cal.com response in this whole Worker that carries
+  // attendee names, emails, phone numbers, and free-text notes — this
+  // endpoint is public, so ONLY start/end ever leave this function. Do not
+  // widen this mapping without re-checking who can call this route.
+  const booked = (Array.isArray(body.data) ? body.data : [])
+    .filter(
+      (b) =>
+        b &&
+        b.status === "accepted" &&
+        b.eventType &&
+        b.eventType.slug === env.CAL_EVENT_SLUG &&
+        typeof b.start === "string" &&
+        typeof b.end === "string"
+    )
+    .map((b) => ({ start: b.start, end: b.end }))
+    .sort((a, b) => new Date(a.start) - new Date(b.start))
+    .slice(0, MAX_UPCOMING);
+
+  return json({ ok: true, booked }, 200, request);
 }
 
 function extractCalError(body) {

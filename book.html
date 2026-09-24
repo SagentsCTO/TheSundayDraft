@@ -34,7 +34,7 @@
 
   .booker {
     max-width: 640px;
-    margin: 40px auto 80px;
+    margin: 40px auto 32px;
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--paper);
@@ -228,6 +228,47 @@
 
   .book-confirmed p { color: var(--muted); }
 
+  /* Upcoming bookings (public — times only, no attendee info) */
+  .upcoming {
+    max-width: 640px;
+    margin: 0 auto 80px;
+  }
+
+  .upcoming h3 {
+    font-size: 16px;
+    text-align: center;
+    margin-bottom: 4px;
+  }
+
+  .upcoming-sub {
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    margin: 0 0 18px;
+  }
+
+  .upcoming-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .upcoming-item {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 16px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 14px;
+    background: var(--paper);
+  }
+
+  .upcoming-item .u-date { font-weight: 600; }
+
+  .upcoming-item .u-time { color: var(--muted); }
+
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -305,6 +346,14 @@
 
     </div>
   </div>
+
+  <div class="wrap">
+    <div class="upcoming" id="upcoming-section" hidden>
+      <h3>Upcoming conversations</h3>
+      <p class="upcoming-sub">Times already booked — pick a different slot above.</p>
+      <div class="upcoming-list" id="upcoming-list"></div>
+    </div>
+  </div>
 </main>
 
 <footer class="site-footer">
@@ -354,6 +403,8 @@
     error: document.getElementById("book-error"),
     confirmedPanel: document.getElementById("confirmed-panel"),
     confirmedDetail: document.getElementById("confirmed-detail"),
+    upcomingSection: document.getElementById("upcoming-section"),
+    upcomingList: document.getElementById("upcoming-list"),
   };
 
   function dateKey(d) {
@@ -396,6 +447,33 @@
       el.status.textContent = "Couldn't load availability right now — please try again shortly.";
     }
     renderDays();
+  }
+
+  async function loadUpcoming() {
+    try {
+      const res = await fetch(`${WORKER_BASE_URL}/api/upcoming-bookings`);
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "Could not load upcoming bookings");
+
+      const booked = Array.isArray(data.booked) ? data.booked : [];
+      if (booked.length === 0) {
+        el.upcomingSection.hidden = true;
+        return;
+      }
+
+      el.upcomingList.innerHTML = booked
+        .map((b) => {
+          const d = new Date(b.start);
+          const dateStr = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+          const timeStr = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+          return `<div class="upcoming-item"><span class="u-date">${dateStr}</span><span class="u-time">${timeStr}</span></div>`;
+        })
+        .join("");
+      el.upcomingSection.hidden = false;
+    } catch (e) {
+      // Non-critical — just don't show the section if it fails.
+      el.upcomingSection.hidden = true;
+    }
   }
 
   function renderDays() {
@@ -510,6 +588,9 @@
       document.getElementById("calendar-panel").hidden = true;
       el.confirmedPanel.hidden = false;
       el.confirmedPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+      // A new booking exists now — refresh the public "already taken" list.
+      loadUpcoming();
     } catch (err) {
       el.error.textContent = err.message + " — pick another time and try again.";
       el.error.hidden = false;
@@ -540,6 +621,7 @@
   renderWeekdayHeader();
   renderDays();
   loadMonth();
+  loadUpcoming();
 })();
 </script>
 </body>
