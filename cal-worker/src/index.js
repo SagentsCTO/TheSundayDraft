@@ -15,9 +15,13 @@
  *     -> proxies Cal.com GET /v2/slots for CAL_USERNAME/CAL_EVENT_SLUG,
  *        returns { ok: true, slots: { "YYYY-MM-DD": ["2026-10-01T09:00:00-04:00", ...] } }
  *
- *   POST /api/book   body: { start, name, email, notes?, timeZone }
+ *   POST /api/book   body: { start, name, email, expertise, notes, timeZone }
  *     -> proxies Cal.com POST /v2/bookings, returns
- *        { ok: true, booking: { start, end, ... } } or { ok: false, error }
+ *        { ok: true, booking: { start, end, ... } } or { ok: false, error }.
+ *        `expertise` and `notes` are both required (mirroring the "record"
+ *        event type's own required booking questions on Cal.com) and are
+ *        sent as bookingFieldsResponses.title / bookingFieldsResponses.notes
+ *        respectively — see handleBook() for why those are the field keys.
  *
  *   GET  /api/upcoming-bookings
  *     -> proxies Cal.com GET /v2/bookings (this is the ONLY route that
@@ -153,7 +157,7 @@ async function handleBook(request, env) {
     return json({ ok: false, error: "Invalid JSON body" }, 400, request);
   }
 
-  const { start, name, email, notes, timeZone } = payload || {};
+  const { start, name, email, expertise, notes, timeZone } = payload || {};
 
   if (!start || typeof start !== "string") {
     return json({ ok: false, error: "Missing booking time" }, 400, request);
@@ -163,6 +167,19 @@ async function handleBook(request, env) {
   }
   if (!email || typeof email !== "string" || !EMAIL_RE.test(email)) {
     return json({ ok: false, error: "A valid email is required" }, 400, request);
+  }
+  // Both of these mirror Cal.com's own "record" event type booking
+  // questions (Event Types → record → Advanced), which were changed to
+  // require both: "What is your area of expertise?" (Cal.com's built-in
+  // "title" field, relabeled) and "List any topics you would like to
+  // cover." (Cal.com's built-in "notes" field, relabeled). Validating here
+  // too means a bad request fails fast with a clear message instead of a
+  // generic Cal.com 400.
+  if (!expertise || typeof expertise !== "string" || !expertise.trim()) {
+    return json({ ok: false, error: "Please share your area of expertise" }, 400, request);
+  }
+  if (!notes || typeof notes !== "string" || !notes.trim()) {
+    return json({ ok: false, error: "Please list a topic you'd like to cover" }, 400, request);
   }
   if (!timeZone || typeof timeZone !== "string") {
     return json({ ok: false, error: "Missing timezone" }, 400, request);
@@ -177,10 +194,17 @@ async function handleBook(request, env) {
       email: email.trim(),
       timeZone,
     },
+    // Keys here are Cal.com's field identifiers, not the display labels
+    // shown to bookers — confirmed against the "record" event type's
+    // Advanced tab. "title" is Cal.com's built-in meeting-title question
+    // (relabeled to "What is your area of expertise?"); "notes" is its
+    // built-in additional-notes question (relabeled to "List any topics
+    // you would like to cover."). Both are now required on Cal.com's side.
+    bookingFieldsResponses: {
+      title: expertise.trim(),
+      notes: notes.trim(),
+    },
   };
-  if (notes && typeof notes === "string" && notes.trim()) {
-    calBody.bookingFieldsResponses = { notes: notes.trim() };
-  }
 
   let calResp;
   try {

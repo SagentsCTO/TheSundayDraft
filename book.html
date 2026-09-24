@@ -396,8 +396,12 @@
             <input type="email" id="book-email" name="email" required autocomplete="email">
           </div>
           <div class="book-field">
-            <label for="book-notes">What would you like to talk about? (optional)</label>
-            <textarea id="book-notes" name="notes"></textarea>
+            <label for="book-expertise">What is your area of expertise?</label>
+            <input type="text" id="book-expertise" name="expertise" required>
+          </div>
+          <div class="book-field">
+            <label for="book-notes">List any topics you would like to cover.</label>
+            <textarea id="book-notes" name="notes" required></textarea>
           </div>
           <button type="submit" class="book-submit" id="book-submit">Confirm booking</button>
           <p class="book-error" id="book-error" hidden></p>
@@ -629,13 +633,14 @@
 
     const name = document.getElementById("book-name").value;
     const email = document.getElementById("book-email").value;
+    const expertise = document.getElementById("book-expertise").value;
     const notes = document.getElementById("book-notes").value;
 
     try {
       const res = await fetch(`${WORKER_BASE_URL}/api/book`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start: selectedStart, name, email, notes, timeZone }),
+        body: JSON.stringify({ start: selectedStart, name, email, expertise, notes, timeZone }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || "Could not complete the booking");
