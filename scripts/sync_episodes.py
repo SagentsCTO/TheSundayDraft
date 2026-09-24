@@ -49,7 +49,6 @@ import hashlib
 import html
 import json
 import os
-import random
 import re
 import sys
 import urllib.request
@@ -103,10 +102,12 @@ AUDIO_RSS_PLAYLIST_ID = "PLVmSsoYIlm7fbnYQh4ZGK8M-l3KNtk1iX"
 # channel ever gets a playlist that shouldn't be treated as a topic).
 EXCLUDED_TOPIC_PLAYLIST_IDS = {FULL_EPISODES_PLAYLIST_ID, AUDIO_RSS_PLAYLIST_ID}
 
-# How many of each playlist's top-viewed videos to rotate a card's pick
-# from — see build_topics_grid_html(). 3 keeps every pick a proven
-# performer while still giving the grid some variety run over run.
-TOPIC_ROTATION_POOL_SIZE = 3
+# How many of each playlist's top-viewed videos to offer as candidates for
+# a topic card — see build_topics_grid_html(). The randomization itself
+# happens client-side, in the visitor's browser (script.js), on every page
+# load; this script only computes the pool. 3 keeps every candidate a
+# proven performer while still giving each refresh some variety.
+TOPIC_POOL_SIZE = 3
 
 # Handle used to resolve the channel ID via the Data API (channels.list
 # ?forHandle=...). Matches the @handle already used in the site's YouTube
@@ -426,7 +427,13 @@ def fetch_playlist_entries_by_views(playlist_id, api_key, limit=5):
     return entries[:limit]
 
 
-TOPIC_CARD_TMPL = """        <a class="topic-card" href="https://www.youtube.com/watch?v={video_id}" target="_blank" rel="noopener">
+# `data-pool` carries the topic's full candidate list (top-viewed videos,
+# already de-duped against the homepage's featured "Latest episode") as
+# JSON, so script.js can pick a different one at random on every page
+# load. The href/img/h3 above are the static fallback — what's shown to
+# search engines and any visitor without JavaScript — and are always the
+# single most-viewed candidate, i.e. pool[0].
+TOPIC_CARD_TMPL = """        <a class="topic-card" href="https://www.youtube.com/watch?v={video_id}" target="_blank" rel="noopener" data-pool="{pool_json}">
           <img class="topic-thumb" src="https://i.ytimg.com/vi/{video_id}/hqdefault.jpg" alt="" loading="lazy">
           <span class="topic-label">{label}</span>
           <h3>{title}</h3>
@@ -502,15 +509,18 @@ def fetch_channel_playlists(api_key):
 
 def build_topics_grid_html():
     """One card per playlist discovered on the channel (via the YouTube
-    Data API). Each card's video is picked at RANDOM from that playlist's
-    top TOPIC_ROTATION_POOL_SIZE most-viewed videos (all-time) — so every
-    pick is still a proven, popular video, but re-running this script can
-    surface a different one each time instead of freezing forever on
-    whichever video happened to hit #1 first. The homepage's 'Latest
-    episode' video (the newest video in FULL_EPISODES_PLAYLIST_ID) is
-    excluded from the pool when possible, so the homepage doesn't show the
-    same video twice; if that's the only video available for a topic, it's
-    shown anyway (duplicate allowed rather than an empty card).
+    Data API). Each card's static content (used for search engines and any
+    visitor without JavaScript) is that playlist's single most-viewed
+    video. Alongside it, the card carries a `data-pool` JSON attribute
+    listing its top TOPIC_POOL_SIZE most-viewed videos — script.js reads
+    that on every page load and swaps in a random one of them, so a real
+    visitor sees a different (but still proven, popular) video each time
+    they refresh, without this script or the homepage HTML needing to
+    change between YouTube-data syncs. The homepage's 'Latest episode'
+    video (the newest video in FULL_EPISODES_PLAYLIST_ID) is excluded from
+    the pool when possible, so the homepage doesn't show the same video
+    twice; if that's the only video available for a topic, it's shown
+    anyway (duplicate allowed rather than an empty card).
 
     Returns None (not a partial result) if the API key is missing, the
     channel/playlist list can't be fetched, or ANY individual playlist
@@ -539,21 +549,24 @@ def build_topics_grid_html():
 
     cards = []
     for pl in topic_playlists:
-        entries = fetch_playlist_entries_by_views(
-            pl["id"], api_key, limit=TOPIC_ROTATION_POOL_SIZE
-        )
+        entries = fetch_playlist_entries_by_views(pl["id"], api_key, limit=TOPIC_POOL_SIZE)
         if not entries:
             print(f"Playlist '{pl['title']}' unreachable/empty — aborting topics-grid update.", file=sys.stderr)
             return None
         pool = [e for e in entries if e["video_id"] != latest_video_id]
         if not pool:
             pool = entries
-        chosen = random.choice(pool)
+        chosen = pool[0]  # most-viewed of the pool — the static/no-JS fallback
+        pool_json = html.escape(
+            json.dumps([{"id": e["video_id"], "title": e["title"]} for e in pool]),
+            quote=True,
+        )
         cards.append(
             TOPIC_CARD_TMPL.format(
                 video_id=chosen["video_id"],
                 label=html.escape(pl["title"]),
                 title=html.escape(chosen["title"]),
+                pool_json=pool_json,
             )
         )
     return "\n".join(cards)
