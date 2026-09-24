@@ -1,0 +1,10 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Local tool caches
+.wrangler/
+**/.wrangler/
+**/cache/
