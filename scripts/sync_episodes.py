@@ -109,6 +109,17 @@ EXCLUDED_TOPIC_PLAYLIST_IDS = {FULL_EPISODES_PLAYLIST_ID, AUDIO_RSS_PLAYLIST_ID}
 # proven performer while still giving each refresh some variety.
 TOPIC_POOL_SIZE = 3
 
+# YouTube Shorts should never show up in the "What we cover" topics grid —
+# see fetch_playlist_entries_by_views(). The Data API has no explicit "is
+# this a Short" flag, so duration is the closest available proxy: YouTube
+# raised the Shorts length cap from 60 seconds to 3 minutes in 2024, so a
+# video this long or shorter is treated as a Short. The trade-off: a
+# genuine non-Short video that happens to run under 3 minutes (a trailer,
+# a short clip) would also be excluded. For this channel — full episodes
+# vs. intentionally-posted Shorts — that's the right call; revisit if the
+# channel ever posts short-form content that isn't a Short.
+SHORTS_MAX_DURATION_SECONDS = 180
+
 # Handle used to resolve the channel ID via the Data API (channels.list
 # ?forHandle=...). Matches the @handle already used in the site's YouTube
 # links.
@@ -382,49 +393,82 @@ def fetch_playlist_video_ids_api(playlist_id, api_key, cap=200):
     return entries[:cap]
 
 
-def fetch_video_view_counts(video_ids, api_key):
-    """{video_id: view_count} for a list of video IDs, via videos.list
-    (batched 50 at a time — the API's max per call). A batch that fails is
-    simply missing from the result rather than raising, since one bad
-    batch shouldn't take down the whole ranking; a video with no view-count
-    data just won't be able to win the "most viewed" comparison."""
-    counts = {}
+_ISO8601_DURATION_RE = re.compile(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$")
+
+
+def _parse_iso8601_duration_seconds(duration):
+    """Parses a YouTube contentDetails.duration string (e.g. "PT4M13S")
+    into whole seconds. Returns None if it doesn't match the expected
+    format — e.g. an in-progress livestream with no duration yet — so
+    callers can fail open (treat "unknown" as "don't exclude it") rather
+    than silently miscounting it as a 0-second video."""
+    if not duration:
+        return None
+    m = _ISO8601_DURATION_RE.match(duration)
+    if not m:
+        return None
+    hours, minutes, seconds = (int(g) if g else 0 for g in m.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def fetch_video_stats(video_ids, api_key):
+    """{video_id: {"views": int, "duration_seconds": int|None}} for a list
+    of video IDs, via videos.list (batched 50 at a time — the API's max per
+    call). A batch that fails is simply missing from the result rather than
+    raising, since one bad batch shouldn't take down the whole ranking; a
+    video with no data just won't be able to win the "most viewed"
+    comparison. duration_seconds is None when it can't be parsed — see
+    fetch_playlist_entries_by_views(), which only excludes a video as a
+    Short when its duration is confidently known to be short enough."""
+    stats = {}
     for i in range(0, len(video_ids), 50):
         batch = video_ids[i : i + 50]
         url = (
             "https://www.googleapis.com/youtube/v3/videos"
-            f"?part=statistics&id={','.join(batch)}&key={api_key}"
+            f"?part=statistics,contentDetails&id={','.join(batch)}&key={api_key}"
         )
         try:
             req = urllib.request.Request(url, headers=BROWSER_HEADERS)
             with urllib.request.urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception as e:
-            print(f"Could not fetch view counts for a batch of videos: {e}", file=sys.stderr)
+            print(f"Could not fetch video stats for a batch of videos: {e}", file=sys.stderr)
             continue
         for item in data.get("items", []):
             vid = item.get("id")
             try:
-                counts[vid] = int(item.get("statistics", {}).get("viewCount", 0))
+                views = int(item.get("statistics", {}).get("viewCount", 0))
             except (TypeError, ValueError):
-                counts[vid] = 0
-    return counts
+                views = 0
+            duration_seconds = _parse_iso8601_duration_seconds(
+                item.get("contentDetails", {}).get("duration")
+            )
+            stats[vid] = {"views": views, "duration_seconds": duration_seconds}
+    return stats
 
 
 def fetch_playlist_entries_by_views(playlist_id, api_key, limit=5):
     """Most-viewed-first list of {video_id, title, views} across every
-    video in a playlist — used to build each topic's rotation pool of
-    proven, popular videos on the homepage instead of just its newest (see
-    build_topics_grid_html()). Returns [] if the playlist can't be listed
-    at all."""
+    full-length video in a playlist — YouTube Shorts are excluded entirely
+    (see SHORTS_MAX_DURATION_SECONDS), so one can never win a spot in a
+    topic's rotation pool no matter how many views it has. Used to build
+    each topic's rotation pool of proven, popular videos on the homepage
+    instead of just its newest (see build_topics_grid_html()). Returns []
+    if the playlist can't be listed at all."""
     entries = fetch_playlist_video_ids_api(playlist_id, api_key)
     if not entries:
         return []
-    views = fetch_video_view_counts([e["video_id"] for e in entries], api_key)
+    stats = fetch_video_stats([e["video_id"] for e in entries], api_key)
+    full_length = []
     for e in entries:
-        e["views"] = views.get(e["video_id"], 0)
-    entries.sort(key=lambda e: e["views"], reverse=True)
-    return entries[:limit]
+        s = stats.get(e["video_id"], {})
+        duration_seconds = s.get("duration_seconds")
+        if duration_seconds is not None and duration_seconds <= SHORTS_MAX_DURATION_SECONDS:
+            continue  # a Short — never eligible, regardless of views
+        e["views"] = s.get("views", 0)
+        full_length.append(e)
+    full_length.sort(key=lambda e: e["views"], reverse=True)
+    return full_length[:limit]
 
 
 # `data-pool` carries the topic's full candidate list (top-viewed videos,
@@ -551,7 +595,7 @@ def build_topics_grid_html():
     for pl in topic_playlists:
         entries = fetch_playlist_entries_by_views(pl["id"], api_key, limit=TOPIC_POOL_SIZE)
         if not entries:
-            print(f"Playlist '{pl['title']}' unreachable/empty — aborting topics-grid update.", file=sys.stderr)
+            print(f"Playlist '{pl['title']}' unreachable, empty, or contains only Shorts — aborting topics-grid update.", file=sys.stderr)
             return None
         pool = [e for e in entries if e["video_id"] != latest_video_id]
         if not pool:

@@ -56,6 +56,12 @@ Edit `src/index.js`, then re-run `wrangler deploy` from this folder. No
 need to touch the API key again unless you rotate it (`wrangler secret put
 CAL_API_KEY` again to replace it).
 
+**If you change the intake form's questions on Cal.com**, `book.html`'s
+form and this Worker's `handleBook()` need matching updates — they don't
+auto-sync. See `../docs/BOOKING_SYSTEM.md` for the current field mapping
+and, importantly, how to find a question's real API identifier (its
+display label is not the key Cal.com's API expects).
+
 ## Costs
 
 Cloudflare Workers' free tier (100,000 requests/day) is far more than a

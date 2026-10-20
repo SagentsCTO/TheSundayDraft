@@ -4,12 +4,23 @@ Live at [thesundaydraft.com](https://thesundaydraft.com), hosted free on GitHub 
 
 ## What's wired up
 
-- **Latest episode** embeds your Spotify show player — it auto-updates every Sunday when a new episode drops, no maintenance required. (A YouTube playlist embed was tried first, but this channel mixes in Shorts, which YouTube's classic iframe player can't play — that's what caused the "this video is unavailable" error. Spotify's embed doesn't have that problem.)
+- **Latest episode** embeds a YouTube playlist video (`FULL_EPISODES_PLAYLIST_ID` in `scripts/sync_episodes.py`) — it auto-updates when a new episode is added to that playlist, no maintenance required.
+- **What we cover** shows each topic playlist's most-viewed video, with a client-side refresh-to-see-another rotation — see `docs/EPISODE_SYNC.md`.
+- **Book a conversation** (`book.html`) lets visitors book a recording slot via Cal.com, through a Cloudflare Worker proxy — see `docs/BOOKING_SYSTEM.md`.
 - **Newsletter** embeds your real Substack subscribe widget.
 - **Listen everywhere** links to your real YouTube, Spotify, and Apple Podcasts pages.
 - **Footer** links to YouTube, BlueSky, and Substack.
 - **Logo, favicon, and social-share image** use your actual logo files (`assets/logo-wordmark.png`, `assets/favicon.png`, `assets/apple-touch-icon.png`, `assets/og-image.jpg`).
 - **About / topics** sections use your channel's actual description and subject pillars.
+
+## Technical documentation
+
+For anyone (human or Claude) picking this project back up:
+
+- **`CLAUDE.md`** — start here: project rules, architecture map, gotchas
+- **`docs/EPISODE_SYNC.md`** — the episode/homepage automation in depth
+- **`docs/BOOKING_SYSTEM.md`** — the Cal.com booking system in depth
+- **`cal-worker/README.md`** — booking Worker setup/redeploy steps
 
 ## Fully automatic new episodes
 
