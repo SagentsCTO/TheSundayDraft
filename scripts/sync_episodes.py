@@ -560,11 +560,13 @@ def build_topics_grid_html():
     that on every page load and swaps in a random one of them, so a real
     visitor sees a different (but still proven, popular) video each time
     they refresh, without this script or the homepage HTML needing to
-    change between YouTube-data syncs. The homepage's 'Latest episode'
-    video (the newest video in FULL_EPISODES_PLAYLIST_ID) is excluded from
-    the pool when possible, so the homepage doesn't show the same video
-    twice; if that's the only video available for a topic, it's shown
-    anyway (duplicate allowed rather than an empty card).
+    change between YouTube-data syncs. Every pool is also de-duped against
+    every OTHER topic's pool (see used_video_ids below), and against the
+    homepage's featured 'Latest episode' video, so the same video can't
+    show up under two different topic cards, or duplicate the homepage's
+    own featured video, on the same page load. A topic only falls back to
+    a video already claimed elsewhere if it has no unclaimed candidates
+    left at all (duplicate allowed rather than an empty card).
 
     Returns None (not a partial result) if the API key is missing, the
     channel/playlist list can't be fetched, or ANY individual playlist
@@ -592,14 +594,28 @@ def build_topics_grid_html():
     latest_video_id = latest_entries[0]["video_id"]
 
     cards = []
+    # Tracks every video already claimed by an earlier (= more recently
+    # created, per fetch_channel_playlists' sort order) topic playlist, plus
+    # the homepage's featured 'Latest episode' video, so later playlists
+    # never pick a video that's already shown elsewhere on the homepage.
+    used_video_ids = {latest_video_id}
     for pl in topic_playlists:
-        entries = fetch_playlist_entries_by_views(pl["id"], api_key, limit=TOPIC_POOL_SIZE)
-        if not entries:
+        # Pull more candidates than we need (cheap — fetch_playlist_entries_by_views
+        # already fetches stats for the whole playlist regardless of `limit`;
+        # this only changes how many of those it returns) so there's room
+        # left over after dropping anything in used_video_ids.
+        candidates = fetch_playlist_entries_by_views(pl["id"], api_key, limit=TOPIC_POOL_SIZE + 12)
+        if not candidates:
             print(f"Playlist '{pl['title']}' unreachable, empty, or contains only Shorts — aborting topics-grid update.", file=sys.stderr)
             return None
-        pool = [e for e in entries if e["video_id"] != latest_video_id]
+        pool = [e for e in candidates if e["video_id"] not in used_video_ids]
         if not pool:
-            pool = entries
+            # Every candidate is already claimed by another topic (likely on
+            # a small or heavily-overlapping channel) — a duplicate is still
+            # better than an empty card.
+            pool = candidates
+        pool = pool[:TOPIC_POOL_SIZE]
+        used_video_ids.update(e["video_id"] for e in pool)
         chosen = pool[0]  # most-viewed of the pool — the static/no-JS fallback
         pool_json = html.escape(
             json.dumps([{"id": e["video_id"], "title": e["title"]} for e in pool]),
