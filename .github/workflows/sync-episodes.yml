@@ -2,8 +2,9 @@ name: Sync new episodes
 
 on:
   schedule:
-    # Runs weekly, Monday 14:00 UTC — the day after new Sunday episodes drop.
-    - cron: "0 14 * * 1"
+    # Runs daily at 14:00 UTC, so a new episode or playlist change is picked
+    # up within a day instead of waiting for the following Monday.
+    - cron: "0 14 * * *"
   # Also runs right after every GitHub Pages build/deploy completes. If this
   # run's sync finds and pushes changes, that push itself triggers another
   # Pages build/page_build event — self-limiting, since the resulting rerun
